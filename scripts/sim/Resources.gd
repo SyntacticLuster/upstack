@@ -19,6 +19,19 @@ var population: int = 5
 var power_supply: int = 0
 var power_used: int = 0
 
+const _RESOURCE_KEYS: Array[String] = [
+	"food",
+	"water",
+	"materials",
+	"morale",
+	"threat",
+	"population",
+	"power_supply",
+	"power_used",
+]
+
+var _deltas: Dictionary = {}
+
 func clamp_all() -> void:
 	food = max(food, 0)
 	water = max(water, 0)
@@ -28,6 +41,30 @@ func clamp_all() -> void:
 	population = max(population, 0)
 	power_supply = max(power_supply, 0)
 	power_used = max(power_used, 0)
+
+func reset_deltas() -> void:
+	_deltas.clear()
+	for key in _RESOURCE_KEYS:
+		_deltas[key] = 0
+
+func add_delta(key: String, amount: int) -> void:
+	if not _deltas.has(key):
+		_deltas[key] = 0
+	_deltas[key] = int(_deltas[key]) + amount
+
+func apply_deltas() -> void:
+	for key in _RESOURCE_KEYS:
+		var delta: int = int(_deltas.get(key, 0))
+		if delta == 0:
+			continue
+		var current_value = get(key)
+		set(key, current_value + delta)
+
+func snapshot() -> String:
+	var parts: Array[String] = []
+	for key in _RESOURCE_KEYS:
+		parts.append("%s=%s" % [key, str(get(key))])
+	return ",".join(parts)
 
 func summary() -> String:
 	return "POP=%d FOOD=%d WATER=%d MAT=%d MOR=%d PWR=%d/%d THR=%d" % [
