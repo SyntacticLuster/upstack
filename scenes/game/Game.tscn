@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://bfksrix53qm4k"]
+
+[ext_resource type="Script" uid="uid://c6g02qts6vbkm" path="res://scripts/sim/Sim.gd" id="1_klkup"]
+
+[node name="Game" type="Node"]
+
+[node name="Sim" type="Node" parent="."]
+script = ExtResource("1_klkup")
+
+[node name="TowerView" type="Node2D" parent="."]
+
+[node name="UI" type="CanvasLayer" parent="."]

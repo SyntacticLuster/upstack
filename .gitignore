@@ -1,0 +1,20 @@
+# Godot
+.import/
+.export/
+*.import
+*.translation
+
+# Godot cache
+.godot/
+
+# Builds
+build/
+export/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
