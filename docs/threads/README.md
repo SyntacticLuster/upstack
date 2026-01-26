@@ -67,9 +67,9 @@ Each file represents the **output** of a reviewed thread, not the initial prompt
 
 Every thread file should begin with a small header:
 
-THREAD: UPSTACK — <NAME>
+THREAD: UPSTACK — `NAME`
 THREAD_TYPE: WORK | TRIAGE | CONTRACT
-SCOPE: <paths or domains>
+SCOPE: `paths or domains`
 VERSION: v0.X
 LAST_REVIEWED: YYYY-MM-DD
 

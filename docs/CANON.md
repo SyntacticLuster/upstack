@@ -1,7 +1,7 @@
-UPSTACK — CANON (Rules + Seed v0)
+# UPSTACK — CANON (Rules + Seed v0)
 
 CANON THREAD CONTRACT
----------------------
+
 This document is an append-only ledger of verified facts about the UPSTACK project.
 The contract for messages recorded here is as follows:
 
@@ -35,12 +35,12 @@ The contract for messages recorded here is as follows:
   - Increment patch for corrections (`v0.1.1`, `v0.1.2`, …).
 
 Scope boundary
---------------
+
 CANON covers only what exists in the Godot project on disk and has been run/observed.
 No marketplace/legal/marketing content. No future design.
 
 Required sections
------------------
+
 - Environment
 - Project Structure
 - Runtime Behavior
@@ -50,16 +50,17 @@ Required sections
 - Pointers (WORK / TRIAGE / DECISIONS threads)
 
 ADD v0.0: CANON Seed (Verified Project State)
---------------------------------------------
 
-### Environment
+## Environment
+
 - Godot scene format indicates Godot 4.x (`format=3` in `.tscn`).
 EVIDENCE: `scenes/game/Game.tscn` begins with `[gd_scene load_steps=2 format=3 ...]`.
 
 - Repository: `SyntacticLuster/upstack` (private), default branch `main`.
 EVIDENCE: GitHub search results identify `SyntacticLuster/upstack` with default branch `main`.
 
-### Project Structure
+## Project Structure
+
 - Root scene: `scenes/game/Game.tscn`.
 EVIDENCE: File exists at `scenes/game/Game.tscn`.
 
@@ -73,7 +74,8 @@ EVIDENCE: `scenes/game/Game.tscn` includes:
 - `Sim` node uses script `res://scripts/sim/Sim.gd`.
 EVIDENCE: `Game.tscn` defines an ext_resource with `path="res://scripts/sim/Sim.gd"` and assigns it to `Sim` node `script`.
 
-### Runtime Behavior
+## Runtime Behavior
+
 - `Sim` prints a “Day 0” resource summary on `_ready()` and prints a per-day summary line during `_process()` when accumulated time exceeds `seconds_per_day`.
 EVIDENCE: `scripts/sim/Sim.gd` contains:
   - `print("Day 0:", res.summary())`
@@ -82,7 +84,8 @@ EVIDENCE: `scripts/sim/Sim.gd` contains:
 - `seconds_per_day` is exported and defaults to `1.0`.
 EVIDENCE: `scripts/sim/Sim.gd` declares `@export var seconds_per_day: float = 1.0`.
 
-### Systems Implemented
+## Systems Implemented
+
 - Tower model exists as `class_name Tower` and stores a 2D grid per floor; default construction adds one floor.
 EVIDENCE: `scripts/sim/Tower.gd` defines `class_name Tower`, `floors: Array = []`, `_init(w,h)` calls `add_floor()`, and `add_floor()` allocates a `height x width` grid of `null`.
 
@@ -103,12 +106,14 @@ EVIDENCE:
 - Unpowered modules apply a morale penalty of `-1` per unpowered module in the day step.
 EVIDENCE: `scripts/sim/Sim.gd` else-branch includes `res.morale -= 1` for unpowered instances.
 
-### Known Verified Failure Modes
+## Known Verified Failure Modes
+
 (Empty: no runtime observation logs were captured in this CANON seed beyond the existence of print statements and code paths.)
 
 EVIDENCE: No observed runtime output lines were collected in this seed beyond code inspection.
 
-### File List (authoritative)
+## File List (authoritative)
+
 - `scenes/game/Game.tscn`
 - `scripts/sim/Sim.gd`
 - `scripts/sim/Tower.gd`
@@ -119,7 +124,8 @@ EVIDENCE: No observed runtime output lines were collected in this seed beyond co
 
 EVIDENCE: Each file above was fetched from the `main` branch of the repository.
 
-### Pointers
+## Pointers
+
 These pointers link to other threads without including their details:
 
 REF v0.0: UPSTACK — WORK
