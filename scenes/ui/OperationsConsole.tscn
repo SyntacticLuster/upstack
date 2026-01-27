@@ -1,0 +1,107 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/OperationsConsole.gd" id="1_console"]
+
+[node name="OperationsConsole" type="PanelContainer"]
+script = ExtResource("1_console")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="RationHardening" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/RationHardening"]
+text = "ration_hardening"
+
+[node name="Mode" type="OptionButton" parent="VBox/RationHardening"]
+
+[node name="Duration" type="SpinBox" parent="VBox/RationHardening"]
+
+[node name="Apply" type="Button" parent="VBox/RationHardening"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/RationHardening"]
+text = "-"
+
+[node name="LaborOverdrive" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/LaborOverdrive"]
+text = "labor_overdrive"
+
+[node name="Intensity" type="SpinBox" parent="VBox/LaborOverdrive"]
+
+[node name="Duration" type="SpinBox" parent="VBox/LaborOverdrive"]
+
+[node name="Apply" type="Button" parent="VBox/LaborOverdrive"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/LaborOverdrive"]
+text = "-"
+
+[node name="ExpeditionCompression" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/ExpeditionCompression"]
+text = "expedition_compression"
+
+[node name="Intensity" type="SpinBox" parent="VBox/ExpeditionCompression"]
+
+[node name="Duration" type="SpinBox" parent="VBox/ExpeditionCompression"]
+
+[node name="Apply" type="Button" parent="VBox/ExpeditionCompression"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/ExpeditionCompression"]
+text = "-"
+
+[node name="InformationThrottling" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/InformationThrottling"]
+text = "information_throttling"
+
+[node name="Level" type="SpinBox" parent="VBox/InformationThrottling"]
+
+[node name="Duration" type="SpinBox" parent="VBox/InformationThrottling"]
+
+[node name="Apply" type="Button" parent="VBox/InformationThrottling"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/InformationThrottling"]
+text = "-"
+
+[node name="ModuleAbandonment" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/ModuleAbandonment"]
+text = "module_abandonment"
+
+[node name="ModuleId" type="LineEdit" parent="VBox/ModuleAbandonment"]
+placeholder_text = "f:x:y"
+
+[node name="Apply" type="Button" parent="VBox/ModuleAbandonment"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/ModuleAbandonment"]
+text = "-"
+
+[node name="EmergencyConversion" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="VBox/EmergencyConversion"]
+text = "emergency_conversion"
+
+[node name="From" type="OptionButton" parent="VBox/EmergencyConversion"]
+
+[node name="To" type="OptionButton" parent="VBox/EmergencyConversion"]
+
+[node name="Amount" type="SpinBox" parent="VBox/EmergencyConversion"]
+
+[node name="Apply" type="Button" parent="VBox/EmergencyConversion"]
+text = "Apply"
+
+[node name="Result" type="Label" parent="VBox/EmergencyConversion"]
+text = "-"

@@ -6,9 +6,14 @@ var powered: bool = false
 var power_required: int = 0
 var power_allocated: int = 0
 var order_index: int = 0
+var priority: int = 50
+var floor: int = 0
+var x: int = 0
+var y: int = 0
 
 func _init(_def: ModuleDef) -> void:
 	def = _def
+	priority = def.priority
 
 func compute_resource_deltas(_resources: Resources) -> Dictionary:
 	var deltas: Dictionary = {}

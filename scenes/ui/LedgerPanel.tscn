@@ -1,0 +1,21 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/LedgerPanel.gd" id="1_ledger"]
+
+[node name="LedgerPanel" type="PanelContainer"]
+script = ExtResource("1_ledger")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Status" type="Label" parent="VBox"]
+text = "DISCONNECTED"
+
+[node name="Scroll" type="ScrollContainer" parent="VBox"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Items" type="VBoxContainer" parent="VBox/Scroll"]
+size_flags_horizontal = 3
+size_flags_vertical = 3

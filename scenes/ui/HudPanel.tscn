@@ -1,0 +1,28 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/HudPanel.gd" id="1_hud"]
+
+[node name="HudPanel" type="PanelContainer"]
+script = ExtResource("1_hud")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="RowTop" type="HBoxContainer" parent="VBox"]
+size_flags_horizontal = 3
+
+[node name="DayValue" type="Label" parent="VBox/RowTop"]
+text = "Day: N/A"
+size_flags_horizontal = 3
+
+[node name="PhaseValue" type="Label" parent="VBox/RowTop"]
+text = "Phase: N/A"
+size_flags_horizontal = 3
+
+[node name="TimeValue" type="Label" parent="VBox/RowTop"]
+text = "Time: N/A"
+size_flags_horizontal = 3
+
+[node name="Stats" type="VBoxContainer" parent="VBox"]
+size_flags_horizontal = 3

@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://bfksrix53qm4k"]
+[gd_scene load_steps=3 format=3 uid="uid://bfksrix53qm4k"]
 
 [ext_resource type="Script" uid="uid://c6g02qts6vbkm" path="res://scripts/sim/Sim.gd" id="1_klkup"]
+[ext_resource type="PackedScene" path="res://scenes/ui/UiRoot.tscn" id="2_m44fu"]
 
 [node name="Game" type="Node"]
 
@@ -10,3 +11,8 @@ script = ExtResource("1_klkup")
 [node name="TowerView" type="Node2D" parent="."]
 
 [node name="UI" type="CanvasLayer" parent="."]
+
+[node name="UiRoot" parent="UI" instance=ExtResource("2_m44fu")]
+layout_mode = 3
+anchors_preset = 15
+sim_path = NodePath("../../Sim")

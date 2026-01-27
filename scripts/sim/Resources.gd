@@ -5,12 +5,18 @@ class_name Resources
 var food: int = 20
 var water: int = 20
 
+# Survival pressure tracking (deterministic, no RNG)
+var days_without_food: int = 0
+var days_without_water: int = 0
+
 # Industrial / stock resources
 var materials: int = 50
 
 # Social state
 var morale: int = 50
 var threat: int = 0
+var morale_ceiling: float = 100.0
+var staying_index: float = 0.0
 
 # People
 var population: int = 5
@@ -36,7 +42,9 @@ func clamp_all() -> void:
 	food = max(food, 0)
 	water = max(water, 0)
 	materials = max(materials, 0)
-	morale = clamp(morale, 0, 100)
+	morale_ceiling = clamp(morale_ceiling, 0.0, 100.0)
+	var morale_cap: int = int(floor(morale_ceiling))
+	morale = clamp(morale, 0, morale_cap)
 	threat = clamp(threat, 0, 999)
 	population = max(population, 0)
 	power_supply = max(power_supply, 0)
@@ -48,9 +56,10 @@ func reset_deltas() -> void:
 		_deltas[key] = 0
 
 func add_delta(key: String, amount: int) -> void:
-	if not _deltas.has(key):
-		_deltas[key] = 0
-	_deltas[key] = int(_deltas[key]) + amount
+	if key not in _RESOURCE_KEYS:
+		push_error("Unknown resource key in add_delta: %s" % key)
+		return
+	_deltas[key] = int(_deltas.get(key, 0)) + amount
 
 func apply_deltas() -> void:
 	for key in _RESOURCE_KEYS:

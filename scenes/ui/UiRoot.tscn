@@ -1,0 +1,29 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/UiRoot.gd" id="1_root"]
+[ext_resource type="PackedScene" path="res://scenes/ui/HudPanel.tscn" id="2_hud"]
+[ext_resource type="PackedScene" path="res://scenes/ui/OperationsConsole.tscn" id="3_console"]
+[ext_resource type="PackedScene" path="res://scenes/ui/LedgerPanel.tscn" id="4_ledger"]
+
+[node name="UiRoot" type="Control"]
+script = ExtResource("1_root")
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="VBox" type="VBoxContainer" parent="."]
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="HudPanel" parent="VBox" instance=ExtResource("2_hud")]
+
+[node name="OperationsConsole" parent="VBox" instance=ExtResource("3_console")]
+
+[node name="LedgerPanel" parent="VBox" instance=ExtResource("4_ledger")]
