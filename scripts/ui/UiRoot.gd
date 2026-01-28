@@ -1,17 +1,25 @@
-extends Control
+extends CanvasLayer
 
 @export var sim_path: NodePath
 @export var game_path: NodePath = NodePath("../..")
 @export var poll_interval_sec: float = 0.25
 
-@onready var hud_panel = $VBox/HudPanel
-@onready var console_panel = $VBox/OperationsConsole
-@onready var ledger_panel = $VBox/LedgerPanel
+const BREAKPOINT_TABS := 800.0
+const BREAKPOINT_RAIL_COLLAPSE := 800.0
+
+@onready var root_control: Control = $Root
+@onready var hud_panel = $Root/Layout/HudPanel
+@onready var content_split: VSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit
+@onready var content_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentTabs
+@onready var console_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole
+@onready var ledger_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/LedgerPanel
 
 var _sim: Object = null
 var _game: Object = null
 var _use_polling: bool = false
 var _poll_accum: float = 0.0
+var _layout_forced_left_rail: bool = false
+var _split_initialized: bool = false
 
 func _ready() -> void:
 	_sim = _resolve_sim()
@@ -30,6 +38,15 @@ func _ready() -> void:
 	else:
 		_use_polling = true
 		_refresh_all()
+	if get_viewport() != null and not get_viewport().size_changed.is_connected(_on_viewport_size_changed):
+		get_viewport().size_changed.connect(_on_viewport_size_changed)
+	call_deferred("_apply_responsive_layout")
+	call_deferred("_log_ui_sizes")
+
+func _log_ui_sizes() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var root_size := root_control.size if root_control != null else Vector2.ZERO
+	print("[boot] viewport_size=%s uiroot_size=%s" % [str(viewport_size), str(root_size)])
 
 func _process(delta: float) -> void:
 	if not _use_polling:
@@ -47,7 +64,95 @@ func _on_game_pacing_state_changed(_multiplier: float, _paused: bool) -> void:
 
 func _refresh_all() -> void:
 	hud_panel.refresh()
+	console_panel.refresh()
 	ledger_panel.refresh()
+
+func _on_viewport_size_changed() -> void:
+	_apply_responsive_layout()
+
+func _apply_responsive_layout() -> void:
+	if root_control == null:
+		return
+	var width := root_control.size.x
+	var narrow := width < BREAKPOINT_TABS
+	var collapse_rail := width <= BREAKPOINT_RAIL_COLLAPSE
+	_set_time_controls_vertical(collapse_rail)
+	_apply_left_rail_layout(width, collapse_rail)
+	_apply_content_layout(narrow)
+
+func _set_time_controls_vertical(use_column: bool) -> void:
+	if hud_panel != null and hud_panel.has_method("set_time_controls_vertical"):
+		hud_panel.set_time_controls_vertical(use_column)
+
+func _apply_left_rail_layout(width: float, collapse_rail: bool) -> void:
+	if hud_panel == null:
+		return
+	if collapse_rail:
+		_layout_forced_left_rail = true
+		if hud_panel.has_method("set_left_rail_collapsed"):
+			hud_panel.set_left_rail_collapsed(true, "layout")
+		return
+	if _layout_forced_left_rail and hud_panel.has_method("restore_left_rail_from_user"):
+		hud_panel.restore_left_rail_from_user()
+		_layout_forced_left_rail = false
+	if hud_panel.has_method("apply_left_rail_width"):
+		hud_panel.apply_left_rail_width(_left_rail_width_for(width))
+
+func _left_rail_width_for(width: float) -> float:
+	if width >= 1920.0:
+		return 260.0
+	if width >= 1600.0:
+		return 220.0
+	if width >= 1152.0:
+		return 180.0
+	return 160.0
+
+func _apply_content_layout(use_tabs: bool) -> void:
+	if content_split == null or content_tabs == null:
+		return
+	if use_tabs:
+		_move_to_tabs()
+	else:
+		_move_to_split()
+	content_tabs.visible = use_tabs
+	content_split.visible = not use_tabs
+	if not use_tabs:
+		_apply_split_ratio()
+
+func _move_to_tabs() -> void:
+	if console_panel != null and console_panel.get_parent() != content_tabs:
+		console_panel.reparent(content_tabs)
+	if ledger_panel != null and ledger_panel.get_parent() != content_tabs:
+		ledger_panel.reparent(content_tabs)
+	_ensure_tab_titles()
+
+func _move_to_split() -> void:
+	if console_panel != null and console_panel.get_parent() != content_split:
+		console_panel.reparent(content_split)
+	if ledger_panel != null and ledger_panel.get_parent() != content_split:
+		ledger_panel.reparent(content_split)
+	if console_panel != null and ledger_panel != null:
+		content_split.move_child(console_panel, 0)
+		content_split.move_child(ledger_panel, 1)
+
+func _ensure_tab_titles() -> void:
+	if console_panel != null:
+		var idx := content_tabs.get_tab_idx_from_control(console_panel)
+		if idx >= 0:
+			content_tabs.set_tab_title(idx, "OPERATIONS")
+	if ledger_panel != null:
+		var idx := content_tabs.get_tab_idx_from_control(ledger_panel)
+		if idx >= 0:
+			content_tabs.set_tab_title(idx, "LEDGER")
+
+func _apply_split_ratio() -> void:
+	if _split_initialized:
+		return
+	if content_split.size.y <= 0.0:
+		call_deferred("_apply_split_ratio")
+		return
+	content_split.split_offset = int(content_split.size.y * 0.65)
+	_split_initialized = true
 
 func _resolve_sim() -> Object:
 	var sim_ref: Object = null

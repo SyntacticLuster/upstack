@@ -19,8 +19,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 code/
-AGENTS.md
-.vscode/
+
+# Local AI / editor instructions (do not commit)
 AGENTS.md
 .github/copilot-instructions.md
-.vscode/

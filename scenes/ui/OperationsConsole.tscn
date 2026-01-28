@@ -4,104 +4,499 @@
 
 [node name="OperationsConsole" type="PanelContainer"]
 script = ExtResource("1_console")
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_minimum_size = Vector2(0, 200)
 
-[node name="VBox" type="VBoxContainer" parent="."]
+[node name="Layout" type="VBoxContainer" parent="."]
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout"]
+size_flags_horizontal = 3
+
+[node name="HeaderLabel" type="Label" parent="Layout/HeaderRow"]
+text = "OPERATIONS CONSOLE"
+
+[node name="Scroll" type="ScrollContainer" parent="Layout"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="RationHardening" type="HBoxContainer" parent="VBox"]
+[node name="Root" type="VBoxContainer" parent="Layout/Scroll"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 12
+
+[node name="SectionPressure" type="VBoxContainer" parent="Layout/Scroll/Root"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="PressureToggle" type="Button" parent="Layout/Scroll/Root/SectionPressure"]
+text = "▾ PRESSURE LEVERS"
+toggle_mode = true
+pressed = true
+
+[node name="PressureContent" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure"]
+size_flags_horizontal = 3
+custom_constants/separation = 10
+
+[node name="RationHardening" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.92, 0.64, 0.25, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/RationHardening"]
-text = "ration_hardening"
-
-[node name="Mode" type="OptionButton" parent="VBox/RationHardening"]
-
-[node name="Duration" type="SpinBox" parent="VBox/RationHardening"]
-
-[node name="Apply" type="Button" parent="VBox/RationHardening"]
-text = "Apply"
-
-[node name="Result" type="Label" parent="VBox/RationHardening"]
-text = "-"
-
-[node name="LaborOverdrive" type="HBoxContainer" parent="VBox"]
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/HeaderRow"]
+text = "RATION HARDENING"
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/LaborOverdrive"]
-text = "labor_overdrive"
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
 
-[node name="Intensity" type="SpinBox" parent="VBox/LaborOverdrive"]
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
 
-[node name="Duration" type="SpinBox" parent="VBox/LaborOverdrive"]
-
-[node name="Apply" type="Button" parent="VBox/LaborOverdrive"]
-text = "Apply"
-
-[node name="Result" type="Label" parent="VBox/LaborOverdrive"]
-text = "-"
-
-[node name="ExpeditionCompression" type="HBoxContainer" parent="VBox"]
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
+text = "Reduce consumption at the cost of morale and recovery."
+autowrap = false
+text_overrun_behavior = 3
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/ExpeditionCompression"]
-text = "expedition_compression"
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
 
-[node name="Intensity" type="SpinBox" parent="VBox/ExpeditionCompression"]
+[node name="ModeRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
 
-[node name="Duration" type="SpinBox" parent="VBox/ExpeditionCompression"]
+[node name="ModeLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs/ModeRow"]
+text = "SEVERITY"
+size_flags_horizontal = 0
 
-[node name="Apply" type="Button" parent="VBox/ExpeditionCompression"]
-text = "Apply"
-
-[node name="Result" type="Label" parent="VBox/ExpeditionCompression"]
-text = "-"
-
-[node name="InformationThrottling" type="HBoxContainer" parent="VBox"]
+[node name="Mode" type="OptionButton" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs/ModeRow"]
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/InformationThrottling"]
-text = "information_throttling"
+[node name="DurationRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
 
-[node name="Level" type="SpinBox" parent="VBox/InformationThrottling"]
+[node name="DurationLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs/DurationRow"]
+text = "DURATION (HOURS)"
+size_flags_horizontal = 0
 
-[node name="Duration" type="SpinBox" parent="VBox/InformationThrottling"]
-
-[node name="Apply" type="Button" parent="VBox/InformationThrottling"]
-text = "Apply"
-
-[node name="Result" type="Label" parent="VBox/InformationThrottling"]
-text = "-"
-
-[node name="ModuleAbandonment" type="HBoxContainer" parent="VBox"]
+[node name="Duration" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/Inputs/DurationRow"]
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/ModuleAbandonment"]
-text = "module_abandonment"
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
 
-[node name="ModuleId" type="LineEdit" parent="VBox/ModuleAbandonment"]
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/FooterRow"]
+text = "APPLY"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/RationHardening/CardRoot"]
+text = ""
+visible = false
+
+[node name="LaborOverdrive" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.92, 0.64, 0.25, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/HeaderRow"]
+text = "LABOR OVERDRIVE"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+text = "Boost output while accelerating fatigue and morale loss."
+autowrap = false
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="IntensityRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="IntensityLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/IntensityRow"]
+text = "INTENSITY"
+size_flags_horizontal = 0
+
+[node name="Intensity" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/IntensityRow"]
+size_flags_horizontal = 3
+
+[node name="DurationRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="DurationLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/DurationRow"]
+text = "DURATION (HOURS)"
+size_flags_horizontal = 0
+
+[node name="Duration" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/DurationRow"]
+size_flags_horizontal = 3
+
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/FooterRow"]
+text = "APPLY"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/LaborOverdrive/CardRoot"]
+text = ""
+visible = false
+
+[node name="InformationThrottling" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.27, 0.55, 0.85, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/HeaderRow"]
+text = "INFORMATION THROTTLING"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+text = "Suppress negative reports to dampen instability."
+autowrap = false
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="LevelRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="LevelLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs/LevelRow"]
+text = "THROTTLE LEVEL"
+size_flags_horizontal = 0
+
+[node name="Level" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs/LevelRow"]
+size_flags_horizontal = 3
+
+[node name="DurationRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="DurationLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs/DurationRow"]
+text = "DURATION (HOURS)"
+size_flags_horizontal = 0
+
+[node name="Duration" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/Inputs/DurationRow"]
+size_flags_horizontal = 3
+
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/FooterRow"]
+text = "APPLY"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+text = ""
+visible = false
+
+[node name="SectionExpeditions" type="VBoxContainer" parent="Layout/Scroll/Root"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="ExpeditionToggle" type="Button" parent="Layout/Scroll/Root/SectionExpeditions"]
+text = "▾ EXPEDITIONS"
+toggle_mode = true
+pressed = true
+
+[node name="ExpeditionContent" type="VBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions"]
+size_flags_horizontal = 3
+custom_constants/separation = 10
+
+[node name="ExpeditionCompression" type="PanelContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.27, 0.55, 0.85, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/HeaderRow"]
+text = "EXPEDITION COMPRESSION"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+text = "Accelerate expeditions at the cost of attention debt."
+autowrap = false
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="IntensityRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="IntensityLabel" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs/IntensityRow"]
+text = "TEMPO INTENSITY"
+size_flags_horizontal = 0
+
+[node name="Intensity" type="SpinBox" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs/IntensityRow"]
+size_flags_horizontal = 3
+
+[node name="DurationRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="DurationLabel" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs/DurationRow"]
+text = "DURATION (HOURS)"
+size_flags_horizontal = 0
+
+[node name="Duration" type="SpinBox" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/Inputs/DurationRow"]
+size_flags_horizontal = 3
+
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/FooterRow"]
+text = "APPLY"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ExpeditionCompression/CardRoot"]
+text = "⚠ OUTCOMES UNCERTAIN — consequences may manifest beyond the current cycle."
+
+[node name="ModuleAbandonment" type="PanelContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.78, 0.22, 0.22, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/HeaderRow"]
+text = "MODULE ABANDONMENT"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+text = "Permanently disable a module to cut maintenance costs."
+autowrap = false
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="ModuleRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ModuleLabel" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/Inputs/ModuleRow"]
+text = "MODULE INSTANCE ID"
+size_flags_horizontal = 0
+
+[node name="ModuleId" type="LineEdit" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/Inputs/ModuleRow"]
 placeholder_text = "f:x:y"
-
-[node name="Apply" type="Button" parent="VBox/ModuleAbandonment"]
-text = "Apply"
-
-[node name="Result" type="Label" parent="VBox/ModuleAbandonment"]
-text = "-"
-
-[node name="EmergencyConversion" type="HBoxContainer" parent="VBox"]
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="VBox/EmergencyConversion"]
-text = "emergency_conversion"
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
 
-[node name="From" type="OptionButton" parent="VBox/EmergencyConversion"]
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/FooterRow"]
+text = "APPLY"
 
-[node name="To" type="OptionButton" parent="VBox/EmergencyConversion"]
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
 
-[node name="Amount" type="SpinBox" parent="VBox/EmergencyConversion"]
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot"]
+text = "⚠ IRREVERSIBLE — this module cannot be restored."
 
-[node name="Apply" type="Button" parent="VBox/EmergencyConversion"]
-text = "Apply"
+[node name="SectionConversions" type="VBoxContainer" parent="Layout/Scroll/Root"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
 
-[node name="Result" type="Label" parent="VBox/EmergencyConversion"]
-text = "-"
+[node name="ConversionToggle" type="Button" parent="Layout/Scroll/Root/SectionConversions"]
+text = "▾ EMERGENCY CONVERSIONS"
+toggle_mode = true
+pressed = true
+
+[node name="ConversionContent" type="VBoxContainer" parent="Layout/Scroll/Root/SectionConversions"]
+size_flags_horizontal = 3
+custom_constants/separation = 10
+
+[node name="EmergencyConversion" type="PanelContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 140)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.65, 0.74, 0.20, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/HeaderRow"]
+text = "EMERGENCY CONVERSION"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/HeaderRow/StatusChip"]
+text = "INACTIVE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+text = "Reallocate resources at a permanent efficiency loss."
+autowrap = false
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="FromRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="FromLabel" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/FromRow"]
+text = "FROM"
+size_flags_horizontal = 0
+
+[node name="From" type="OptionButton" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/FromRow"]
+size_flags_horizontal = 3
+
+[node name="ToRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ToLabel" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/ToRow"]
+text = "TO"
+size_flags_horizontal = 0
+
+[node name="To" type="OptionButton" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/ToRow"]
+size_flags_horizontal = 3
+
+[node name="AmountRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="AmountLabel" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/AmountRow"]
+text = "AMOUNT"
+size_flags_horizontal = 0
+
+[node name="Amount" type="SpinBox" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/AmountRow"]
+size_flags_horizontal = 3
+
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/FooterRow"]
+text = "APPLY"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot/FooterRow"]
+text = "INACTIVE"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionConversions/ConversionContent/EmergencyConversion/CardRoot"]
+text = "⚠ MORAL DEBT — each use permanently reduces conversion efficiency."

@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "geequlim.godot-tools",
+    "eamodio.gitlens",
+    "editorconfig.editorconfig",
+    "usernamehw.errorlens",
+    "redhat.vscode-yaml",
+    "yzhang.markdown-all-in-one"
+  ]
+}

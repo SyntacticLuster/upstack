@@ -4,18 +4,69 @@
 
 [node name="LedgerPanel" type="PanelContainer"]
 script = ExtResource("1_ledger")
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_minimum_size = Vector2(0, 120)
 
-[node name="VBox" type="VBoxContainer" parent="."]
+[node name="Root" type="VBoxContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 6
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 0.0
+margin_top = 0.0
+margin_right = 0.0
+margin_bottom = 0.0
+
+[node name="HeaderRow" type="HBoxContainer" parent="Root"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="HeaderLabel" type="Label" parent="Root/HeaderRow"]
+text = "LEDGER"
+
+[node name="HeaderSpacer" type="Control" parent="Root/HeaderRow"]
+size_flags_horizontal = 3
+
+[node name="CollapseButton" type="Button" parent="Root/HeaderRow"]
+text = "COLLAPSE ▾"
+
+[node name="Filters" type="HBoxContainer" parent="Root"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="AllFilter" type="Button" parent="Root/Filters"]
+text = "ALL"
+toggle_mode = true
+pressed = true
+
+[node name="SimFilter" type="Button" parent="Root/Filters"]
+text = "SIM"
+toggle_mode = true
+
+[node name="EventsFilter" type="Button" parent="Root/Filters"]
+text = "EVENTS"
+toggle_mode = true
+
+[node name="DebugFilter" type="Button" parent="Root/Filters"]
+text = "DEBUG"
+toggle_mode = true
+
+[node name="Status" type="Label" parent="Root"]
+text = "STATUS: DISCONNECTED"
+
+[node name="CollapsedPreview" type="Label" parent="Root"]
+visible = false
+text = "LAST: -"
+
+[node name="Scroll" type="ScrollContainer" parent="Root"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="Status" type="Label" parent="VBox"]
-text = "DISCONNECTED"
-
-[node name="Scroll" type="ScrollContainer" parent="VBox"]
+[node name="Items" type="VBoxContainer" parent="Root/Scroll"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
-
-[node name="Items" type="VBoxContainer" parent="VBox/Scroll"]
-size_flags_horizontal = 3
-size_flags_vertical = 3
+custom_constants/separation = 4

@@ -4,6 +4,7 @@ class_name IncidentDefs
 # Declarative incident and threshold data consumed by Sim.gd.
 # No simulation logic should live here.
 
+# ORDER IS LOAD-BEARING: do not reorder INCIDENT_DEFS (determinism depends on array order).
 const INCIDENT_DEFS: Array[Dictionary] = [
 	{
 		"id": "trace_ping",
@@ -26,4 +27,3 @@ const INCIDENT_DEFS: Array[Dictionary] = [
 ]
 
 const THREAT_THRESHOLDS: Array[int] = [10, 25, 40, 60, 80, 100]
-

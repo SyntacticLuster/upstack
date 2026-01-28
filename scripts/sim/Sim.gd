@@ -5,7 +5,26 @@ signal tick(day: int)
 
 @export var seconds_per_day: float = 1.0
 
+const HOURS_PER_DAY := 24
+const MAX_HOUR_TICKS_PER_FRAME := 6
+
+func _ticks_per_day() -> int:
+	if phase == "HOUR_TICK":
+		return HOURS_PER_DAY
+	return 1
+
+func _days_to_ticks(days: int) -> int:
+	var safe_days: int = int(days)
+	if safe_days < 0:
+		safe_days = 0
+	if safe_days == 0:
+		return 0
+	return safe_days * _ticks_per_day()
+
 var day: int = 0
+var hour_index: int = 0
+var hour_of_day: int = 0
+var phase: String = "HOUR_TICK"
 var _accum: float = 0.0
 var sim_seed: int = 0
 
@@ -15,6 +34,7 @@ var db: ModuleDB
 var _last_obs_tokens: Array[String] = []
 
 const IncidentDefsRef = preload("res://scripts/sim/IncidentDefs.gd")
+const LeverDefsRef = preload("res://scripts/sim/LeverDefs.gd")
 
 const MODULE_DELTA_KEYS: Array[String] = [
 	"food",
@@ -25,23 +45,36 @@ const MODULE_DELTA_KEYS: Array[String] = [
 
 class SimCommand extends RefCounted:
 	var type: String = ""
-	var payload: Dictionary = {}
+	var payload: Dictionary = null
 
-	func _init(_type: String = "", _payload: Dictionary = {}) -> void:
+	func _init(_type: String = "", _payload: Dictionary = null) -> void:
 		type = _type
-		payload = _payload
+		payload = _duplicate_payload(_payload)
+
+	func clone() -> SimCommand:
+		var copy := SimCommand.new()
+		copy.type = type
+		copy.payload = _duplicate_payload(payload)
+		return copy
+
+	func _duplicate_payload(value: Dictionary) -> Dictionary:
+		if value == null:
+			return {}
+		if value is Dictionary:
+			return value.duplicate(true)
+		return {}
 
 const CMD_SET_RATIONS := "SET_RATIONS"
 const CMD_SET_MODULE_ENABLED := "SET_MODULE_ENABLED"
 const CMD_SET_MODULE_PRIORITY := "SET_MODULE_PRIORITY"
 const CMD_EXPEDITION := "EXPEDITION"
 
-const LEVER_RATION_HARDENING := "RATION_HARDENING"
-const LEVER_LABOR_OVERDRIVE := "LABOR_OVERDRIVE"
-const LEVER_EXPEDITION_COMPRESSION := "EXPEDITION_COMPRESSION"
-const LEVER_INFORMATION_THROTTLING := "INFORMATION_THROTTLING"
-const LEVER_MODULE_ABANDONMENT := "MODULE_ABANDONMENT"
-const LEVER_EMERGENCY_CONVERSION := "EMERGENCY_CONVERSION"
+const LEVER_RATION_HARDENING := LeverDefsRef.LEVER_RATION_HARDENING
+const LEVER_LABOR_OVERDRIVE := LeverDefsRef.LEVER_LABOR_OVERDRIVE
+const LEVER_EXPEDITION_COMPRESSION := LeverDefsRef.LEVER_EXPEDITION_COMPRESSION
+const LEVER_INFORMATION_THROTTLING := LeverDefsRef.LEVER_INFORMATION_THROTTLING
+const LEVER_MODULE_ABANDONMENT := LeverDefsRef.LEVER_MODULE_ABANDONMENT
+const LEVER_EMERGENCY_CONVERSION := LeverDefsRef.LEVER_EMERGENCY_CONVERSION
 
 const RATION_HARDENING_SOFT_MULT := 0.9
 const RATION_HARDENING_HARD_MULT := 0.75
@@ -70,6 +103,8 @@ const INFO_THROTTLE_MORALE_MIN_FACTOR := 0.4
 const INFO_THROTTLE_MISALLOC_PER_LEVEL := 0.1
 const INFO_THROTTLE_MISALLOC_MIN := 0.6
 const INFO_THROTTLE_SHOCK_THREAT_MULT := 0.5
+
+const SIM_FLOAT_SNAP := 0.01 # Determinism hardening: snap small float accumulators post-update.
 
 const CONVERSION_SCAR_PER_USE := 1
 const CONVERSION_EFFICIENCY_LOSS := 0.1
@@ -128,19 +163,19 @@ var _delayed_consequence_queue: Array[Dictionary] = []
 var _delayed_insertion_counter: int = 0
 
 # Lever state (persistent)
-var ration_hardening_days_left: int = 0
+var ration_hardening_ticks_left: int = 0
 var ration_hardening_mode: String = ""
 var ration_scar: float = 0.0
 
-var labor_overdrive_days_left: int = 0
+var labor_overdrive_ticks_left: int = 0
 var labor_overdrive_intensity: int = 0
 var labor_scar: float = 0.0
 
-var expedition_compression_days_left: int = 0
+var expedition_compression_ticks_left: int = 0
 var expedition_compression_intensity: int = 0
 var expedition_attention: float = 0.0
 
-var info_throttle_days_left: int = 0
+var info_throttle_ticks_left: int = 0
 var info_throttle_level: int = 0
 var info_throttle_backlog: float = 0.0
 
@@ -158,15 +193,25 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_accum += delta
-	while _accum >= seconds_per_day:
-		_accum -= seconds_per_day
-		day += 1
-		var incidents := _step_day_core(day, sim_seed, tower, res, db)
-		emit_signal("tick", day)
-		print(_format_log_line(day, sim_seed, res, incidents, _last_obs_tokens))
+	var seconds_per_hour := seconds_per_day / float(HOURS_PER_DAY)
+	var ticks_this_frame := 0
+	while _accum >= seconds_per_hour and ticks_this_frame < MAX_HOUR_TICKS_PER_FRAME:
+		_accum -= seconds_per_hour
+		ticks_this_frame += 1
+		_advance_hour()
 
 func _step_day() -> void:
 	_step_day_core(day, sim_seed, tower, res, db)
+
+func _advance_hour() -> void:
+	hour_index += 1
+	hour_of_day = int(hour_index % HOURS_PER_DAY)
+	day = hour_index // HOURS_PER_DAY
+	phase = "HOUR_TICK"
+	if hour_of_day == 0:
+		var incidents := _step_day_core(day, sim_seed, tower, res, db)
+		print(_format_log_line(day, sim_seed, res, incidents, _last_obs_tokens))
+	tick.emit(day)
 
 
 func _setup_default_state() -> void:
@@ -230,16 +275,16 @@ func _reset_policies_and_pools() -> void:
 	expedition_counter = 0
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
-	ration_hardening_days_left = 0
+	ration_hardening_ticks_left = 0
 	ration_hardening_mode = ""
 	ration_scar = 0.0
-	labor_overdrive_days_left = 0
+	labor_overdrive_ticks_left = 0
 	labor_overdrive_intensity = 0
 	labor_scar = 0.0
-	expedition_compression_days_left = 0
+	expedition_compression_ticks_left = 0
 	expedition_compression_intensity = 0
 	expedition_attention = 0.0
-	info_throttle_days_left = 0
+	info_throttle_ticks_left = 0
 	info_throttle_level = 0
 	info_throttle_backlog = 0.0
 	abandoned_modules.clear()
@@ -255,6 +300,35 @@ func enqueue_command(cmd: SimCommand) -> void:
 func clear_commands() -> void:
 	_command_queue.clear()
 
+func _duration_payload_ticks(payload: Dictionary) -> int:
+	if payload == null:
+		return 0
+	if payload.has("duration_ticks"):
+		return max(int(payload.get("duration_ticks", 0)), 0)
+	if payload.has("duration_hours"):
+		return max(int(payload.get("duration_hours", 0)), 0)
+	if payload.has("duration_days"):
+		return _days_to_ticks(int(payload.get("duration_days", 0)))
+	return 0
+
+func _duration_payload_summary(payload: Dictionary) -> Dictionary:
+	var summary: Dictionary = {}
+	if payload == null:
+		return summary
+	if payload.has("duration_days"):
+		summary["duration_days"] = int(payload.get("duration_days", 0))
+	if payload.has("duration_hours"):
+		summary["duration_hours"] = int(payload.get("duration_hours", 0))
+	if payload.has("duration_ticks"):
+		summary["duration_ticks"] = int(payload.get("duration_ticks", 0))
+	return summary
+
+func _dict_merge_into(dst: Dictionary, src: Dictionary) -> void:
+	if dst == null or src == null:
+		return
+	for key in src.keys():
+		dst[key] = src[key]
+
 func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	var ok := false
 	var sanitized: Dictionary = {}
@@ -263,61 +337,73 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 
 	match lever_id:
 		LEVER_RATION_HARDENING:
-			var mode := str(payload.get("mode", ""))
-			var duration := int(payload.get("duration_days", 0))
+			var mode: String = str(payload.get("mode", ""))
+			var duration_ticks := _duration_payload_ticks(payload)
 			if mode != "soft" and mode != "hard":
 				immediate_summary = "REJECTED: invalid mode"
-			elif duration <= 0:
+			elif duration_ticks <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				ration_hardening_mode = mode
-				ration_hardening_days_left = duration
-				sanitized = {"mode": mode, "duration_days": duration}
+				ration_hardening_ticks_left = duration_ticks
+				var duration_info: Dictionary = _duration_payload_summary(payload)
+				duration_info["duration_ticks"] = duration_ticks
+				sanitized = {"mode": mode}
+				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "policy active"
 				debts_summary = "scar accrues"
 				ok = true
 		LEVER_LABOR_OVERDRIVE:
-			var intensity := int(payload.get("intensity", 0))
-			var duration := int(payload.get("duration_days", 0))
+			var intensity: int = int(payload.get("intensity", 0))
+			var duration_ticks := _duration_payload_ticks(payload)
 			if intensity <= 0:
 				immediate_summary = "REJECTED: invalid intensity"
-			elif duration <= 0:
+			elif duration_ticks <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				intensity = int(clamp(intensity, 1, LABOR_OVERDRIVE_MAX_INTENSITY))
 				labor_overdrive_intensity = intensity
-				labor_overdrive_days_left = duration
-				sanitized = {"intensity": intensity, "duration_days": duration}
+				labor_overdrive_ticks_left = duration_ticks
+				var duration_info: Dictionary = _duration_payload_summary(payload)
+				duration_info["duration_ticks"] = duration_ticks
+				sanitized = {"intensity": intensity}
+				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "throughput boosted"
 				debts_summary = "labor scar accrues"
 				ok = true
 		LEVER_EXPEDITION_COMPRESSION:
-			var intensity := int(payload.get("intensity", 0))
-			var duration := int(payload.get("duration_days", 0))
+			var intensity: int = int(payload.get("intensity", 0))
+			var duration_ticks := _duration_payload_ticks(payload)
 			if intensity <= 0:
 				immediate_summary = "REJECTED: invalid intensity"
-			elif duration <= 0:
+			elif duration_ticks <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				intensity = int(clamp(intensity, 1, EXPEDITION_COMPRESSION_MAX_INTENSITY))
 				expedition_compression_intensity = intensity
-				expedition_compression_days_left = duration
-				sanitized = {"intensity": intensity, "duration_days": duration}
+				expedition_compression_ticks_left = duration_ticks
+				var duration_info: Dictionary = _duration_payload_summary(payload)
+				duration_info["duration_ticks"] = duration_ticks
+				sanitized = {"intensity": intensity}
+				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "expedition tempo compressed"
 				debts_summary = "attention accrues"
 				ok = true
 		LEVER_INFORMATION_THROTTLING:
-			var level := int(payload.get("level", 0))
-			var duration := int(payload.get("duration_days", 0))
+			var level: int = int(payload.get("level", 0))
+			var duration_ticks := _duration_payload_ticks(payload)
 			if level <= 0:
 				immediate_summary = "REJECTED: invalid level"
-			elif duration <= 0:
+			elif duration_ticks <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				level = int(clamp(level, 1, INFO_THROTTLE_MAX_LEVEL))
 				info_throttle_level = level
-				info_throttle_days_left = duration
-				sanitized = {"level": level, "duration_days": duration}
+				info_throttle_ticks_left = duration_ticks
+				var duration_info: Dictionary = _duration_payload_summary(payload)
+				duration_info["duration_ticks"] = duration_ticks
+				sanitized = {"level": level}
+				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "instability dampened"
 				debts_summary = "backlog accrues"
 				ok = true
@@ -325,7 +411,7 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 			if tower == null:
 				immediate_summary = "REJECTED: tower unavailable"
 			else:
-				var coords := _resolve_module_target(payload, tower)
+				var coords: Dictionary = _resolve_module_target(payload, tower)
 				if coords.is_empty():
 					immediate_summary = "REJECTED: module not found"
 				else:
@@ -343,9 +429,9 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 						debts_summary = "irreversible loss"
 						ok = true
 		LEVER_EMERGENCY_CONVERSION:
-			var from_key := str(payload.get("from", ""))
-			var to_key := str(payload.get("to", ""))
-			var amount := int(payload.get("amount", 0))
+			var from_key: String = str(payload.get("from", ""))
+			var to_key: String = str(payload.get("to", ""))
+			var amount: int = int(payload.get("amount", 0))
 			if from_key == "" or to_key == "":
 				immediate_summary = "REJECTED: missing resource"
 			elif from_key == to_key:
@@ -390,24 +476,24 @@ func _module_key(f: int, x: int, y: int) -> String:
 func _parse_module_instance_id(instance_id: String) -> Dictionary:
 	if instance_id == "":
 		return {}
-	var parts := instance_id.split(":")
+	var parts: Array[String] = instance_id.split(":")
 	if parts.size() != 3:
 		return {}
 	return {"f": int(parts[0]), "x": int(parts[1]), "y": int(parts[2])}
 
 func _resolve_module_target(payload: Dictionary, sim_tower: Tower) -> Dictionary:
 	if payload.has("f") and payload.has("x") and payload.has("y"):
-		var coords := _payload_coords(payload)
+		var coords: Dictionary = _payload_coords(payload)
 		if sim_tower.has_cell(int(coords["f"]), int(coords["x"]), int(coords["y"])):
 			return coords
 	if payload.has("module_instance_id"):
-		var parsed := _parse_module_instance_id(str(payload.get("module_instance_id", "")))
+		var parsed: Dictionary = _parse_module_instance_id(str(payload.get("module_instance_id", "")))
 		if parsed.is_empty():
 			return {}
 		if sim_tower.has_cell(int(parsed["f"]), int(parsed["x"]), int(parsed["y"])):
 			return parsed
 	if payload.has("module_id"):
-		var target_id := str(payload.get("module_id", ""))
+		var target_id: String = str(payload.get("module_id", ""))
 		if target_id == "":
 			return {}
 		for f in range(sim_tower.floors.size()):
@@ -451,7 +537,10 @@ func _step_day_for(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB) -> vo
 func _apply_module_deltas_stably(sim_res: Resources, deltas: Dictionary) -> void:
 	for key in MODULE_DELTA_KEYS:
 		if deltas.has(key):
-			sim_res.add_delta(key, int(deltas[key]))
+			var raw: Variant = deltas[key]
+			assert(raw != null, "Module delta missing value for '%s'." % key)
+			assert(raw is int or raw is float, "Module delta for '%s' must be numeric." % key)
+			sim_res.add_delta(key, int(raw))
 
 func _evaluate_incidents(sim_day: int, run_seed: int, sim_res: Resources) -> Array[String]:
 	var incidents: Array[String] = []
@@ -460,6 +549,7 @@ func _evaluate_incidents(sim_day: int, run_seed: int, sim_res: Resources) -> Arr
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(run_seed) * 73856093 + int(sim_day) * 19349663
 
+	# INCIDENT_DEFS order is load-bearing for determinism; do not reorder.
 	for incident_def in IncidentDefsRef.INCIDENT_DEFS:
 		var threshold: int = int(incident_def.get("threshold", 0))
 		if sim_res.threat < threshold:
@@ -537,7 +627,7 @@ func _scale_deltas_for_workforce(deltas: Dictionary, multiplier: float) -> Dicti
 
 func _recompute_expedition_heat() -> void:
 	var weighted: int = expedition_count_total + (expedition_streak * 3) + (expedition_recent_score * 2)
-	expedition_heat = int(weighted // 4)
+	expedition_heat = int(weighted / 4)
 
 func _start_expedition_day() -> void:
 	expedition_happened_today = false
@@ -558,17 +648,18 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 	info_misalloc_multiplier_today = 1.0
 	lever_threat_bonus_today = 0
 
-	var ration_active_today := ration_hardening_days_left > 0
-	var labor_active_today := labor_overdrive_days_left > 0
-	var expedition_active_today := expedition_compression_days_left > 0
-	var info_active_today := info_throttle_days_left > 0
+	var ration_active_today := ration_hardening_ticks_left > 0
+	var labor_active_today := labor_overdrive_ticks_left > 0
+	var expedition_active_today := expedition_compression_ticks_left > 0
+	var info_active_today := info_throttle_ticks_left > 0
 	var conversions_processed_today := false
 
 	if not abandoned_modules.is_empty():
-		var keys := abandoned_modules.keys()
+		var keys: Array = abandoned_modules.keys()
+		# NOTE: abandoned_modules MUST NOT be mutated during iteration.
 		keys.sort()
 		for key in keys:
-			var parts := str(key).split(":")
+			var parts: Array[String] = str(key).split(":")
 			if parts.size() != 3:
 				continue
 			var f: int = int(parts[0])
@@ -584,12 +675,13 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		ration_consumption_multiplier_today = multiplier
 		var scar_gain := RATION_SCAR_PER_DAY_HARD if hard else RATION_SCAR_PER_DAY_SOFT
 		ration_scar += scar_gain
-		ration_hardening_days_left -= 1
+		ration_scar = snapped(ration_scar, SIM_FLOAT_SNAP)
+		ration_hardening_ticks_left = max(ration_hardening_ticks_left - 1, 0)
 		_obs_push(obs, "LEVER_RATION@%s" % ration_hardening_mode)
 		_log_lever_event(
 			sim_day,
 			LEVER_RATION_HARDENING,
-			{"mode": ration_hardening_mode, "days_left": ration_hardening_days_left},
+			{"mode": ration_hardening_mode, "ticks_left": ration_hardening_ticks_left},
 			"consumption x%0.2f" % multiplier,
 			"scar=%.2f" % ration_scar
 		)
@@ -614,12 +706,13 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		var intensity := labor_overdrive_intensity
 		labor_output_multiplier_today = 1.0 + (float(intensity) * LABOR_OVERDRIVE_MULT_PER_LEVEL)
 		labor_scar += float(intensity) * LABOR_SCAR_PER_DAY
-		labor_overdrive_days_left -= 1
+		labor_scar = snapped(labor_scar, SIM_FLOAT_SNAP)
+		labor_overdrive_ticks_left = max(labor_overdrive_ticks_left - 1, 0)
 		_obs_push(obs, "LEVER_LABOR@%d" % intensity)
 		_log_lever_event(
 			sim_day,
 			LEVER_LABOR_OVERDRIVE,
-			{"intensity": intensity, "days_left": labor_overdrive_days_left},
+			{"intensity": intensity, "ticks_left": labor_overdrive_ticks_left},
 			"output x%0.2f" % labor_output_multiplier_today,
 			"scar=%.2f" % labor_scar
 		)
@@ -645,12 +738,13 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		expedition_yield_bonus_per_crew_today = intensity * EXPEDITION_COMPRESSION_YIELD_PER_CREW
 		expedition_attention_bonus_per_trip_today = intensity * EXPEDITION_ATTENTION_PER_TRIP
 		expedition_attention += float(intensity * EXPEDITION_ATTENTION_PER_DAY)
-		expedition_compression_days_left -= 1
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_compression_ticks_left = max(expedition_compression_ticks_left - 1, 0)
 		_obs_push(obs, "LEVER_EXPEDITION@%d" % intensity)
 		_log_lever_event(
 			sim_day,
 			LEVER_EXPEDITION_COMPRESSION,
-			{"intensity": intensity, "days_left": expedition_compression_days_left},
+			{"intensity": intensity, "ticks_left": expedition_compression_ticks_left},
 			"yield bonus per crew=%d" % expedition_yield_bonus_per_crew_today,
 			"attention=%.1f" % expedition_attention
 		)
@@ -681,18 +775,17 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 			INFO_THROTTLE_MISALLOC_MIN,
 			1.0
 		)
-		info_throttle_days_left -= 1
+		info_throttle_ticks_left = max(info_throttle_ticks_left - 1, 0)
 		_obs_push(obs, "LEVER_INFO@%d" % level)
 		_log_lever_event(
 			sim_day,
 			LEVER_INFORMATION_THROTTLING,
-			{"level": level, "days_left": info_throttle_days_left},
+			{"level": level, "ticks_left": info_throttle_ticks_left},
 			"morale damp x%0.2f" % info_throttle_morale_factor_today,
 			"backlog=%0.2f" % info_throttle_backlog
 		)
 	elif info_throttle_backlog > 0.0:
 		var shock := int(ceil(info_throttle_backlog))
-		info_throttle_backlog = 0.0
 		if shock > 0:
 			sim_res.morale -= shock
 			sim_res.threat += int(ceil(float(shock) * INFO_THROTTLE_SHOCK_THREAT_MULT))
@@ -704,15 +797,17 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 				"backlog released",
 				"shock applied"
 			)
+		# Clear after application to prevent double-apply on future phases.
+		info_throttle_backlog = 0.0
 
 	if not pending_conversions.is_empty():
 		conversions_processed_today = true
-		var queue := pending_conversions.duplicate()
+		var queue: Array = pending_conversions.duplicate()
 		pending_conversions.clear()
 		for entry in queue:
-			var from_key := str(entry.get("from", ""))
-			var to_key := str(entry.get("to", ""))
-			var amount := int(entry.get("amount", 0))
+			var from_key: String = str(entry.get("from", ""))
+			var to_key: String = str(entry.get("to", ""))
+			var amount: int = int(entry.get("amount", 0))
 			if amount <= 0:
 				_log_lever_event(sim_day, LEVER_EMERGENCY_CONVERSION, entry, "REJECTED: invalid amount", "")
 				continue
@@ -762,6 +857,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 
 func _phase_commands(_sim_day: int, _run_seed: int, sim_tower: Tower, sim_res: Resources, obs: Array[String]) -> void:
 	# Start-of-day deterministic command application. Order is enqueue order.
+	assert(sim_res.population >= 0, "Population must be non-negative at phase entry.")
 	expedition_crew_today = 0
 	expedition_threat_today = 0
 	expedition_morale_penalty_today = 0
@@ -821,8 +917,8 @@ func _phase_commands(_sim_day: int, _run_seed: int, sim_tower: Tower, sim_res: R
 	_command_queue.clear()
 
 func _cmd_set_rations(payload: Dictionary, _sim_res: Resources, obs: Array[String]) -> void:
-	var next_food := float(payload.get("food", food_ration))
-	var next_water := float(payload.get("water", water_ration))
+	var next_food: float = float(payload.get("food", food_ration))
+	var next_water: float = float(payload.get("water", water_ration))
 	food_ration = clamp(next_food, 0.0, 1.0)
 	water_ration = clamp(next_water, 0.0, 1.0)
 	_obs_push(obs, "CMD:RATION_SET")
@@ -835,7 +931,7 @@ func _payload_coords(payload: Dictionary) -> Dictionary:
 	}
 
 func _cmd_set_module_enabled(payload: Dictionary, sim_tower: Tower, obs: Array[String]) -> void:
-	var coords := _payload_coords(payload)
+	var coords: Dictionary = _payload_coords(payload)
 	var f: int = int(coords["f"])
 	var x: int = int(coords["x"])
 	var y: int = int(coords["y"])
@@ -854,7 +950,7 @@ func _cmd_set_module_enabled(payload: Dictionary, sim_tower: Tower, obs: Array[S
 	_obs_push(obs, "CMD:MODULE_ENABLED@%d:%d:%d:%d" % [f, x, y, int(enabled)])
 
 func _cmd_set_module_priority(payload: Dictionary, sim_tower: Tower, obs: Array[String]) -> void:
-	var coords := _payload_coords(payload)
+	var coords: Dictionary = _payload_coords(payload)
 	var f: int = int(coords["f"])
 	var x: int = int(coords["x"])
 	var y: int = int(coords["y"])
@@ -904,7 +1000,7 @@ func _schedule_expedition_lag(
 		magnitude_base = 2 + int(rng.randi() % 5) # 2..6 threat
 	else:
 		magnitude_base = 1 + int(rng.randi() % 3) # 1..3 morale
-	var heat_bonus: int = int(heat_at_schedule // EXPEDITION_MAG_HEAT_DIV)
+	var heat_bonus: int = int(heat_at_schedule / EXPEDITION_MAG_HEAT_DIV)
 	var magnitude: int = min(magnitude_base + heat_bonus, EXPEDITION_MAG_CAP)
 
 	var entry := {
@@ -921,8 +1017,8 @@ func _schedule_expedition_lag(
 	_obs_push(obs, "EXPEDITION_LAG_SCHEDULED@%s@D+%d@M%d@heat=%d" % [kind, delay, magnitude, heat_at_schedule])
 
 func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: Resources, obs: Array[String]) -> void:
-	var target := str(payload.get("target", "materials"))
-	var requested_crew := int(payload.get("crew", 1))
+	var target: String = str(payload.get("target", "materials"))
+	var requested_crew: int = int(payload.get("crew", 1))
 	var crew: int = int(clamp(requested_crew, 0, sim_res.population))
 	_obs_push(obs, "CMD:EXPEDITION@%s" % target)
 	if crew <= 0:
@@ -964,9 +1060,11 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 
 	if expedition_attention_bonus_per_trip_today > 0:
 		expedition_attention += float(expedition_attention_bonus_per_trip_today)
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 		_obs_push(obs, "ATTN+%d" % expedition_attention_bonus_per_trip_today)
 
 	if not scav_pools.has(target):
+		push_warning("Unknown expedition target '%s' in scav_pools; yield will be zero." % target)
 		scav_pools[target] = 0
 
 	var remaining := int(scav_pools[target])
@@ -1020,6 +1118,7 @@ func _phase_delayed_consequences(sim_day: int, sim_res: Resources, obs: Array[St
 		return int(a.get("idx", -1)) < int(b.get("idx", -1))
 	)
 
+	_delayed_consequence_queue = remaining
 	for entry in due:
 		var kind: String = str(entry.get("kind", "UNKNOWN"))
 		var magnitude: int = int(entry.get("magnitude", 0))
@@ -1035,8 +1134,6 @@ func _phase_delayed_consequences(sim_day: int, sim_res: Resources, obs: Array[St
 				continue
 		_obs_push(obs, "EXPEDITION_LAG_TRIGGER@%s@M%d@heat=%d" % [kind, magnitude, heat_at_schedule])
 
-	_delayed_consequence_queue = remaining
-
 func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 	# Phase A: baselines (irreversible drift + per-day resets)
 	var staying_step: float = 1.0
@@ -1048,6 +1145,7 @@ func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 		staying_step += 0.5
 
 	sim_res.staying_index += staying_step
+	sim_res.staying_index = snapped(sim_res.staying_index, SIM_FLOAT_SNAP)
 
 	var ceiling_decay: float = 0.05 + (staying_step * 0.02) + (sim_res.staying_index * 0.001)
 	if sim_res.days_without_food >= 3:
@@ -1093,7 +1191,7 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 
 				var inst := ModuleInstance.new(def)
 				inst.order_index = order_index
-				inst.floor_index = f
+				inst.floor = f
 				inst.x = x
 				inst.y = y
 				var prio_override: Variant = sim_tower.get_module_priority_override(f, x, y)
@@ -1112,8 +1210,8 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 			return a.def.id < b.def.id
 		if a.def.name != b.def.name:
 			return a.def.name < b.def.name
-		if a.floor_index != b.floor_index:
-			return a.floor_index < b.floor_index
+		if a.floor != b.floor:
+			return a.floor < b.floor
 		if a.y != b.y:
 			return a.y < b.y
 		if a.x != b.x:
@@ -1191,6 +1289,7 @@ func _apply_throttled_morale_penalty(sim_res: Resources, amount: int, obs: Array
 		sim_res.morale -= reduced
 	if deferred > 0:
 		info_throttle_backlog += float(deferred)
+		info_throttle_backlog = snapped(info_throttle_backlog, SIM_FLOAT_SNAP)
 		if tag != "":
 			_obs_push(obs, "THROTTLED@%s@%d" % [tag, deferred])
 
@@ -1289,7 +1388,7 @@ func _emit_observations(pre_threat: int, sim_res: Resources, obs: Array[String])
 	# Phase G: emit observations (tokens derived from transitions)
 	var threshold_logs := _evaluate_threat_thresholds(pre_threat, sim_res.threat)
 	for marker in threshold_logs:
-		var parts := str(marker).split("@")
+		var parts: Array[String] = str(marker).split("@")
 		if parts.size() == 2:
 			_obs_push(obs, "THR_CROSSED@%s" % parts[1])
 
@@ -1387,7 +1486,7 @@ func _clone_command_array(commands: Array) -> Array[SimCommand]:
 	var cloned: Array[SimCommand] = []
 	for cmd in commands:
 		if cmd is SimCommand:
-			cloned.append(cmd)
+			cloned.append(cmd.clone())
 	return cloned
 
 func _run_scripted_once(days_to_run: int, run_seed: int, commands_by_day: Dictionary) -> Array[String]:

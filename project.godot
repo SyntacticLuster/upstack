@@ -14,3 +14,13 @@ config/name="UPSTACK"
 run/main_scene="uid://bfksrix53qm4k"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
+
+[display]
+
+window/size/mode="windowed"
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/min_size/width=800
+window/min_size/height=600
+window/size/window_width=1152
+window/size/window_height=648

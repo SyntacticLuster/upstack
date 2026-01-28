@@ -4,44 +4,137 @@
 
 [node name="HudPanel" type="PanelContainer"]
 script = ExtResource("1_hud")
-
-[node name="VBox" type="VBoxContainer" parent="."]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="RowTop" type="HBoxContainer" parent="VBox"]
+[node name="Root" type="VBoxContainer" parent="."]
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="TopBarPanel" type="PanelContainer" parent="Root"]
 size_flags_horizontal = 3
 
-[node name="DayValue" type="Label" parent="VBox/RowTop"]
-text = "Day: N/A"
+[node name="TopBar" type="HBoxContainer" parent="Root/TopBarPanel"]
+size_flags_horizontal = 3
+custom_constants/separation = 12
+
+[node name="DayGroup" type="HBoxContainer" parent="Root/TopBarPanel/TopBar"]
+size_flags_horizontal = 1
+custom_constants/separation = 10
+
+[node name="DayValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
+text = "DAY: N/A"
+size_flags_horizontal = 1
+
+[node name="PhaseValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
+text = "PHASE: N/A"
+size_flags_horizontal = 1
+
+[node name="TimeValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
+text = "HOUR: N/A"
+size_flags_horizontal = 1
+
+[node name="LeftSpacer" type="Control" parent="Root/TopBarPanel/TopBar"]
 size_flags_horizontal = 3
 
-[node name="PhaseValue" type="Label" parent="VBox/RowTop"]
-text = "Phase: N/A"
+[node name="TimeControlsRow" type="HBoxContainer" parent="Root/TopBarPanel/TopBar"]
+custom_constants/separation = 6
+
+[node name="PauseButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "PAUSE"
+
+[node name="HalfButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "0.5×"
+
+[node name="OneButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "1×"
+
+[node name="TwoButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "2×"
+
+[node name="FourButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "4×"
+
+[node name="TimeControlsColumn" type="VBoxContainer" parent="Root/TopBarPanel/TopBar"]
+visible = false
+custom_constants/separation = 6
+
+[node name="RightSpacer" type="Control" parent="Root/TopBarPanel/TopBar"]
 size_flags_horizontal = 3
 
-[node name="TimeValue" type="Label" parent="VBox/RowTop"]
-text = "Time: N/A"
+[node name="AlertsGroup" type="HBoxContainer" parent="Root/TopBarPanel/TopBar"]
+custom_constants/separation = 6
+
+[node name="AlertsLabel" type="Label" parent="Root/TopBarPanel/TopBar/AlertsGroup"]
+text = "ALERTS:"
+
+[node name="AlertsValue" type="Label" parent="Root/TopBarPanel/TopBar/AlertsGroup"]
+text = "0"
+
+[node name="MainRow" type="HBoxContainer" parent="Root"]
 size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 12
 
-[node name="TimeControls" type="HBoxContainer" parent="VBox"]
+[node name="LeftRailPanel" type="PanelContainer" parent="Root/MainRow"]
+size_flags_vertical = 3
+
+[node name="LeftRailRoot" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel"]
 size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
 
-[node name="PauseButton" type="Button" parent="VBox/TimeControls"]
-text = "⏸"
-
-[node name="HalfButton" type="Button" parent="VBox/TimeControls"]
-text = "0.5x"
-
-[node name="OneButton" type="Button" parent="VBox/TimeControls"]
-text = "1x"
-
-[node name="TwoButton" type="Button" parent="VBox/TimeControls"]
-text = "2x"
-
-[node name="FourButton" type="Button" parent="VBox/TimeControls"]
-text = "4x"
-
-
-[node name="Stats" type="VBoxContainer" parent="VBox"]
+[node name="ExpandedRail" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot"]
 size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="ResourcesLabel" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+text = "RESOURCES"
+
+[node name="ResourceCards" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="StatusLabel" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+text = "STATUS"
+
+[node name="StatusChips" type="FlowContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+size_flags_horizontal = 3
+custom_constants/hseparation = 8
+custom_constants/vseparation = 8
+
+[node name="CollapseRail" type="Button" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+text = "COLLAPSE ◀"
+
+[node name="CollapsedRail" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot"]
+visible = false
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="CollapsedIcons" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/CollapsedRail"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="ExpandRail" type="Button" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/CollapsedRail"]
+text = "EXPAND ▶"
+
+[node name="ContentColumn" type="VBoxContainer" parent="Root/MainRow"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="ContentSplit" type="VSplitContainer" parent="Root/MainRow/ContentColumn"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ContentTabs" type="TabContainer" parent="Root/MainRow/ContentColumn"]
+visible = false
+size_flags_horizontal = 3
+size_flags_vertical = 3

@@ -4,9 +4,14 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/HudPanel.tscn" id="2_hud"]
 [ext_resource type="PackedScene" path="res://scenes/ui/OperationsConsole.tscn" id="3_console"]
 [ext_resource type="PackedScene" path="res://scenes/ui/LedgerPanel.tscn" id="4_ledger"]
+[ext_resource type="Theme" path="res://scenes/ui/Theme_UPSTACK.tres" id="5_theme"]
 
-[node name="UiRoot" type="Control"]
+[node name="UiRoot" type="CanvasLayer"]
+layer = 10
 script = ExtResource("1_root")
+theme = ExtResource("5_theme")
+
+[node name="Root" type="Control" parent="."]
 anchor_left = 0.0
 anchor_top = 0.0
 anchor_right = 1.0
@@ -14,16 +19,31 @@ anchor_bottom = 1.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="VBox" type="VBoxContainer" parent="."]
+[node name="Background" type="ColorRect" parent="Root"]
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+color = Color(0.0470588, 0.054902, 0.0705882, 1.0)
+
+[node name="Layout" type="VBoxContainer" parent="Root"]
 anchor_left = 0.0
 anchor_top = 0.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 size_flags_horizontal = 3
 size_flags_vertical = 3
+custom_constants/separation = 0
 
-[node name="HudPanel" parent="VBox" instance=ExtResource("2_hud")]
+[node name="HudPanel" parent="Root/Layout" instance=ExtResource("2_hud")]
+size_flags_horizontal = 3
+size_flags_vertical = 3
 
-[node name="OperationsConsole" parent="VBox" instance=ExtResource("3_console")]
+[node name="OperationsConsole" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("3_console")]
+size_flags_horizontal = 3
+size_flags_vertical = 3
 
-[node name="LedgerPanel" parent="VBox" instance=ExtResource("4_ledger")]
+[node name="LedgerPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("4_ledger")]
+size_flags_horizontal = 3
+size_flags_vertical = 3

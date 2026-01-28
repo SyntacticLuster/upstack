@@ -21,7 +21,13 @@ func _ready() -> void:
 	set_process(true)
 	set_process_input(true)
 	max_ticks_per_frame = max(1, max_ticks_per_frame)
+	_log_window_state()
 	_emit_pacing_state()
+
+func _log_window_state() -> void:
+	var mode := DisplayServer.window_get_mode()
+	var size := DisplayServer.window_get_size()
+	print("[boot] window_mode=%s window_size=%s" % [str(mode), str(size)])
 
 func _process(delta: float) -> void:
 	if is_paused or sim == null:
