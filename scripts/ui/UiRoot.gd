@@ -1,6 +1,7 @@
 extends Control
 
 @export var sim_path: NodePath
+@export var game_path: NodePath = NodePath("../..")
 @export var poll_interval_sec: float = 0.25
 
 @onready var hud_panel = $VBox/HudPanel
@@ -8,6 +9,7 @@ extends Control
 @onready var ledger_panel = $VBox/LedgerPanel
 
 var _sim: Object = null
+var _game: Object = null
 var _use_polling: bool = false
 var _poll_accum: float = 0.0
 
@@ -16,6 +18,12 @@ func _ready() -> void:
 	hud_panel.set_sim(_sim)
 	console_panel.set_sim(_sim)
 	ledger_panel.set_sim(_sim)
+
+	_game = _resolve_game()
+	hud_panel.set_game(_game)
+	if _game != null and _game.has_signal("pacing_state_changed"):
+		_game.connect("pacing_state_changed", Callable(self, "_on_game_pacing_state_changed"))
+
 	if _sim != null and _sim.has_signal("tick"):
 		_sim.connect("tick", Callable(self, "_on_sim_tick"))
 		_refresh_all()
@@ -34,6 +42,9 @@ func _process(delta: float) -> void:
 func _on_sim_tick(_day: int) -> void:
 	_refresh_all()
 
+func _on_game_pacing_state_changed(_multiplier: float, _paused: bool) -> void:
+	_refresh_all()
+
 func _refresh_all() -> void:
 	hud_panel.refresh()
 	ledger_panel.refresh()
@@ -47,3 +58,13 @@ func _resolve_sim() -> Object:
 	if sim_ref == null:
 		sim_ref = get_tree().get_root().find_child("Sim", true, false)
 	return sim_ref
+
+func _resolve_game() -> Object:
+	var game_ref: Object = null
+	if game_path != NodePath(""):
+		var node := get_node_or_null(game_path)
+		if node != null:
+			game_ref = node
+	if game_ref == null:
+		game_ref = get_tree().get_root().find_child("Game", true, false)
+	return game_ref
