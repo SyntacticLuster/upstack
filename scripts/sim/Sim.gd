@@ -537,7 +537,7 @@ func _scale_deltas_for_workforce(deltas: Dictionary, multiplier: float) -> Dicti
 
 func _recompute_expedition_heat() -> void:
 	var weighted: int = expedition_count_total + (expedition_streak * 3) + (expedition_recent_score * 2)
-	expedition_heat = int(weighted / 4)
+	expedition_heat = int(weighted // 4)
 
 func _start_expedition_day() -> void:
 	expedition_happened_today = false
@@ -904,7 +904,7 @@ func _schedule_expedition_lag(
 		magnitude_base = 2 + int(rng.randi() % 5) # 2..6 threat
 	else:
 		magnitude_base = 1 + int(rng.randi() % 3) # 1..3 morale
-	var heat_bonus: int = int(heat_at_schedule / EXPEDITION_MAG_HEAT_DIV)
+	var heat_bonus: int = int(heat_at_schedule // EXPEDITION_MAG_HEAT_DIV)
 	var magnitude: int = min(magnitude_base + heat_bonus, EXPEDITION_MAG_CAP)
 
 	var entry := {
@@ -1093,7 +1093,7 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 
 				var inst := ModuleInstance.new(def)
 				inst.order_index = order_index
-				inst.floor = f
+				inst.floor_index = f
 				inst.x = x
 				inst.y = y
 				var prio_override: Variant = sim_tower.get_module_priority_override(f, x, y)
@@ -1112,8 +1112,8 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 			return a.def.id < b.def.id
 		if a.def.name != b.def.name:
 			return a.def.name < b.def.name
-		if a.floor != b.floor:
-			return a.floor < b.floor
+		if a.floor_index != b.floor_index:
+			return a.floor_index < b.floor_index
 		if a.y != b.y:
 			return a.y < b.y
 		if a.x != b.x:

@@ -157,7 +157,7 @@ func _set_speed_index(index: int) -> void:
 		return
 	_game.set_speed_index(index)
 
-func _on_game_pacing_state_changed(multiplier: float, paused: bool) -> void:
+func _on_game_pacing_state_changed(_multiplier: float, _paused: bool) -> void:
 	_refresh_pacing_controls()
 
 func _refresh_pacing_controls() -> void:

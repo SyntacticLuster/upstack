@@ -18,6 +18,9 @@ func get_day() -> int:
 		return 0
 	return int(value)
 
+func get_day_index() -> int:
+	return get_day()
+
 func get_phase() -> String:
 	var value: Variant = _get_sim_property("phase")
 	if value == null:
@@ -29,6 +32,14 @@ func get_time() -> String:
 	if value == null:
 		return ""
 	return str(value)
+
+func get_hour_of_day() -> int:
+	var value: Variant = _get_sim_property("hour_of_day")
+	if value == null:
+		value = _get_sim_property("hour")
+	if value == null:
+		return 0
+	return int(value)
 
 func get_res() -> Object:
 	if _sim == null:
