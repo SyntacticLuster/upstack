@@ -4,6 +4,7 @@ class_name Sim
 signal tick(day: int)
 
 @export var seconds_per_day: float = 1.0
+@export var enable_food_debug_log: bool = OS.is_debug_build()
 
 const HOURS_PER_DAY := 24
 const MAX_HOUR_TICKS_PER_FRAME := 6
@@ -32,6 +33,8 @@ var tower: Tower
 var res: Resources
 var db: ModuleDB
 var _last_obs_tokens: Array[String] = []
+var _last_module_snapshots: Array[Dictionary] = []
+var _last_production_metrics: Dictionary = {}
 
 const IncidentDefsRef = preload("res://scripts/sim/IncidentDefs.gd")
 const LeverDefsRef = preload("res://scripts/sim/LeverDefs.gd")
@@ -42,6 +45,31 @@ const MODULE_DELTA_KEYS: Array[String] = [
 	"materials",
 	"morale",
 ]
+
+const THREAT_EVENT_THRESHOLDS: Array[int] = [40, 80, 120, 160, 200]
+const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 15]
+const ATTENTION_SUMMARY_INTERVAL_HOURS := 6
+const INTRO_QUIET_DAYS := 1
+const ATTENTION_DEBT_LOW_THRESHOLD := 10.0
+const ATTENTION_DEBT_HIGH_THRESHOLD := 25.0
+const ATTENTION_NEUTRAL_MESSAGE := "Background resonance is steady. Nothing urgent to report."
+const ATTENTION_LOW_MESSAGE := "Attention metrics are inching upward. Maintain caution."
+const ATTENTION_WARNING_MESSAGE := "Attention debt building. Forecast: tensions will rise if unchecked."
+const ATTENTION_HIGH_MESSAGE := "Attention debt accruing.\nForecast: When it surfaces, it will surface violently."
+
+const RNG_BASE_MULTIPLIER := 73856093
+const RNG_DAY_MULTIPLIER := 19349663
+const RNG_CONTEXT_SEED_MASK := 0x7FFFFFFFFFFFFFFF
+const RNG_OFFSET_INCIDENTS := 1
+const RNG_OFFSET_EXPEDITIONS := 2
+const RNG_OFFSET_COMMANDS := 3
+const RNG_OFFSET_STRUCTURAL := 4
+
+const PHASE_LEVERS := "levers"
+const PHASE_COMMANDS := "commands"
+const PHASE_INCIDENTS := "incidents"
+const PHASE_EXPEDITIONS := "expeditions"
+const PHASE_STRUCTURAL := "structural"
 
 class SimCommand extends RefCounted:
 	var type: String = ""
@@ -76,6 +104,21 @@ const LEVER_INFORMATION_THROTTLING := LeverDefsRef.LEVER_INFORMATION_THROTTLING
 const LEVER_MODULE_ABANDONMENT := LeverDefsRef.LEVER_MODULE_ABANDONMENT
 const LEVER_EMERGENCY_CONVERSION := LeverDefsRef.LEVER_EMERGENCY_CONVERSION
 
+const LEVER_STATE_TRACKED: Array[String] = [
+	LEVER_RATION_HARDENING,
+	LEVER_LABOR_OVERDRIVE,
+	LEVER_EXPEDITION_COMPRESSION,
+	LEVER_INFORMATION_THROTTLING,
+]
+const LEVER_DISPLAY_NAMES := {
+	LEVER_RATION_HARDENING: "Ration hardening",
+	LEVER_LABOR_OVERDRIVE: "Labor overdrive",
+	LEVER_EXPEDITION_COMPRESSION: "Expedition compression",
+	LEVER_INFORMATION_THROTTLING: "Information throttling",
+	LEVER_MODULE_ABANDONMENT: "Module abandonment",
+	LEVER_EMERGENCY_CONVERSION: "Emergency conversion",
+}
+
 const RATION_HARDENING_SOFT_MULT := 0.9
 const RATION_HARDENING_HARD_MULT := 0.75
 const RATION_SCAR_PER_DAY_SOFT := 0.1
@@ -104,7 +147,39 @@ const INFO_THROTTLE_MISALLOC_PER_LEVEL := 0.1
 const INFO_THROTTLE_MISALLOC_MIN := 0.6
 const INFO_THROTTLE_SHOCK_THREAT_MULT := 0.5
 
-const SIM_FLOAT_SNAP := 0.01 # Determinism hardening: snap small float accumulators post-update.
+const SIM_FLOAT_SNAP: float = 0.01 # Determinism hardening: snap small float accumulators post-update.
+
+const STRUCTURAL_STRAIN_PER_MODULE := 0.04
+const STRUCTURAL_STRAIN_PER_MAINT_DEFICIT := 0.5
+const STRUCTURAL_STRAIN_DECAY := 1.0
+const STRUCTURAL_TELEGRAPH_THRESHOLDS: Array[float] = [25.0, 45.0, 70.0]
+const STRUCTURAL_TELEGRAPH_EVENTS: Array[String] = [
+	"STRUCT_CREAKS",
+	"STRUCT_FRACTURES",
+	"STRUCT_CRITICAL",
+]
+const STRUCTURAL_TELEGRAPH_DELAY_DAYS := 1
+const STRUCTURAL_COLLAPSE_MIN_STRAIN := 45.0
+const STRUCTURAL_COLLAPSE_MIN_DAYS := 3
+const STRUCTURAL_COLLAPSE_DEBT_SCALE := 0.05
+const STRUCTURAL_COLLAPSE_DEBT_PENALTY := 0.5
+const STRUCTURAL_COLLAPSE_DECAY := 0.5
+const STRUCTURAL_COLLAPSE_DELAY_DAYS := 1
+const STRUCTURAL_WARNING_MORALE_PENALTY := 1
+const STRUCTURAL_COLLAPSE_MORALE_PENALTY := 2
+const STRUCTURAL_COLLAPSE_MATERIALS_LOSS := 5
+const STRUCTURAL_INCIDENT_IDS: Array[String] = [
+	"support_shift",
+	"floor_sag",
+	"structural_breach",
+]
+
+const MAINTENANCE_COST_PER_MODULE := 0.5
+const MAINTENANCE_STRAIN_THRESHOLD := 50.0
+const MAINTENANCE_STRAIN_MULTIPLIER := 0.02
+const THREAT_PER_NOISE := 0.5
+const THREAT_PER_HEAT := 0.5
+const THREAT_PER_POWER := 0.2
 
 const CONVERSION_SCAR_PER_USE := 1
 const CONVERSION_EFFICIENCY_LOSS := 0.1
@@ -115,6 +190,16 @@ const CONVERTIBLE_RESOURCES: Array[String] = ["food", "water", "materials", "mor
 
 var _command_queue: Array[SimCommand] = []
 var lever_events: Array[Dictionary] = []
+var events: Array[Dictionary] = []
+var visibility_triggered: bool = false
+var _event_sequence: int = 0
+var _last_maintenance_shortfall: bool = false
+var _last_attention_summary_hour_index: int = -1
+var _last_attention_summary_value: float = 0.0
+var _lever_active_state: Dictionary = {}
+var _rng_usage_history: Array[Dictionary] = []
+var _rng_usage_lookup: Dictionary = {}
+var _rng_instances: Dictionary[String, RandomNumberGenerator] = {}
 
 # Expedition memory tuning (deterministic, minimal)
 const EXPEDITION_RECENT_GAIN := 3
@@ -161,6 +246,12 @@ var expedition_happened_today: bool = false
 var expedition_counter: int = 0
 var _delayed_consequence_queue: Array[Dictionary] = []
 var _delayed_insertion_counter: int = 0
+var _consequence_queue: Array[Dictionary] = []
+var _consequence_insertion_counter: int = 0
+var _structural_telegraph_level: int = -1
+var _structural_warning_logged: bool = false
+var _structural_high_strain_days: int = 0
+var _structural_collapse_scheduled: bool = false
 
 # Lever state (persistent)
 var ration_hardening_ticks_left: int = 0
@@ -222,12 +313,15 @@ func _step_day() -> void:
 func _advance_hour() -> void:
 	hour_index += 1
 	hour_of_day = int(hour_index % HOURS_PER_DAY)
-	day = int(hour_index / HOURS_PER_DAY)
+	day = int(float(hour_index) / float(HOURS_PER_DAY))
 	phase = "HOUR_TICK"
 	_update_lever_hourly_states()
+	_emit_lever_state_changes()
+	# Per-day phases execute when we roll over to hour 0; RNG work happens inside `_step_day_core`.
 	if hour_of_day == 0:
 		var incidents := _step_day_core(day, sim_seed, tower, res, db)
 		print(_format_log_line(day, sim_seed, res, incidents, _last_obs_tokens))
+	_emit_attention_debt_summary()
 	tick.emit(day)
 
 
@@ -257,6 +351,8 @@ func _setup_default_state() -> void:
 	res.morale = 65
 	res.population = 6
 
+	_refresh_module_snapshots({})
+
 func _reset_policies_and_pools() -> void:
 	food_ration = 1.0
 	water_ration = 1.0
@@ -268,6 +364,16 @@ func _reset_policies_and_pools() -> void:
 	}
 	_command_queue.clear()
 	lever_events.clear()
+	events.clear()
+	_event_sequence = 0
+	visibility_triggered = false
+	_reset_rng_usage_log()
+	_last_maintenance_shortfall = false
+	_last_attention_summary_hour_index = -1
+	_last_attention_summary_value = 0.0
+	_lever_active_state.clear()
+	for lever_id in LEVER_STATE_TRACKED:
+		_lever_active_state[lever_id] = false
 	expedition_crew_today = 0
 	expedition_threat_today = 0
 	expedition_morale_penalty_today = 0
@@ -292,6 +398,12 @@ func _reset_policies_and_pools() -> void:
 	expedition_counter = 0
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
+	_consequence_queue.clear()
+	_consequence_insertion_counter = 0
+	_structural_telegraph_level = -1
+	_structural_warning_logged = false
+	_structural_high_strain_days = 0
+	_structural_collapse_scheduled = false
 	ration_hardening_ticks_left = 0
 	ration_hardening_start_hour_index = -1
 	ration_hardening_duration_hours = 0
@@ -401,8 +513,99 @@ func _update_lever_hourly_states() -> void:
 func _dict_merge_into(dst: Dictionary, src: Dictionary) -> void:
 	if dst == null or src == null:
 		return
-	for key in src.keys():
+	var keys := src.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
 		dst[key] = src[key]
+
+func _rng_tracker_key(tracker_day: int, tracker_phase: String, context: String) -> String:
+	return "%d|%s|%s" % [tracker_day, tracker_phase, context]
+
+func _deterministic_seed(seed_day: int, offset: int) -> int:
+	var accumulator: int = int(sim_seed)
+	accumulator = int((accumulator * RNG_BASE_MULTIPLIER + int(seed_day) * RNG_DAY_MULTIPLIER + offset) & RNG_CONTEXT_SEED_MASK)
+	return accumulator
+
+func _create_rng_tracker(tracker_day: int, tracker_phase: String, context: String, offset: int, seed_override: Variant = null) -> Dictionary:
+	var base_seed := _deterministic_seed(tracker_day, offset)
+	var raw_seed := int(seed_override) if seed_override != null else base_seed
+	var seed_value := int(raw_seed) & RNG_CONTEXT_SEED_MASK
+	var key := _rng_tracker_key(tracker_day, tracker_phase, context)
+	var entry: Dictionary = {
+		"day": tracker_day,
+		"phase": tracker_phase,
+		"context": context,
+		"seed": seed_value,
+		"calls": 0,
+		"key": key,
+	}
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	_rng_usage_history.append(entry)
+	_rng_usage_lookup[key] = entry
+	_rng_instances[key] = rng
+	return entry
+
+func _rng_call(entry: Dictionary) -> void:
+	if entry == null:
+		return
+	entry["calls"] = int(entry.get("calls", 0)) + 1
+
+func _rng_instance_for_entry(entry: Dictionary) -> RandomNumberGenerator:
+	if entry == null:
+		return null
+	var entry_key: String = str(entry.get("key", ""))
+	var candidate_value: Variant = _rng_instances.get(entry_key)
+	if candidate_value is RandomNumberGenerator:
+		return candidate_value as RandomNumberGenerator
+	return null
+
+func _rng_randf(entry: Dictionary) -> float:
+	_rng_call(entry)
+	var rng := _rng_instance_for_entry(entry)
+	if rng == null:
+		return 0.0
+	return rng.randf()
+
+func _rng_randi(entry: Dictionary) -> int:
+	_rng_call(entry)
+	var rng := _rng_instance_for_entry(entry)
+	if rng == null:
+		return 0
+	return rng.randi()
+
+func _reset_rng_usage_log() -> void:
+	_rng_usage_history.clear()
+	_rng_usage_lookup.clear()
+	_rng_instances.clear()
+
+func get_rng_usage_history() -> Array[Dictionary]:
+	var copies: Array[Dictionary] = []
+	for entry in _rng_usage_history:
+		if entry is Dictionary:
+			copies.append(_rng_entry_metadata(entry))
+		else:
+			copies.append({})
+	return copies
+
+func _rng_entry_metadata(entry: Dictionary) -> Dictionary:
+	var result: Dictionary = {}
+	if entry == null:
+		return result
+	result["day"] = int(entry.get("day", 0))
+	result["phase"] = str(entry.get("phase", ""))
+	result["context"] = str(entry.get("context", ""))
+	result["seed"] = int(entry.get("seed", 0))
+	result["calls"] = int(entry.get("calls", 0))
+	result["key"] = str(entry.get("key", ""))
+	return result
+
+func get_last_production_metrics() -> Dictionary:
+	if _last_production_metrics.is_empty():
+		return {}
+	return _last_production_metrics.duplicate(true)
 
 func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	var ok := false
@@ -566,9 +769,374 @@ func _log_lever_event(
 		"debts_applied": debts_applied,
 	}
 	lever_events.append(entry)
+	var message := _format_lever_message(lever_id, payload, immediate_effects_summary, debts_applied)
+	var debug_entry := entry.duplicate(true)
+	debug_entry["id"] = _next_event_id()
+	debug_entry["type"] = "LEVER_EVENT"
+	debug_entry["severity"] = "debug"
+	debug_entry["visibility"] = "dev_only"
+	debug_entry["message"] = message
+	debug_entry["source"] = "lever"
+	events.append(debug_entry)
+
+func _format_lever_message(
+	lever_id: String,
+	payload: Dictionary,
+	immediate_effects_summary: String,
+	debts_applied: String
+) -> String:
+	var parts: Array[String] = []
+	if immediate_effects_summary != "":
+		parts.append(immediate_effects_summary)
+	if debts_applied != "":
+		parts.append(debts_applied)
+	if parts.is_empty():
+		if payload != null and not payload.is_empty():
+			var payload_parts: Array[String] = []
+			var payload_keys := payload.keys()
+			payload_keys.sort()
+			for key in payload_keys:
+				var payload_value: Variant = payload.get(key)
+				payload_parts.append("%s=%s" % [key, str(payload_value)])
+			parts.append("payload {" + ", ".join(payload_parts) + "}")
+		else:
+			parts.append(lever_id)
+	return ", ".join(parts)
+
+func _next_event_id() -> int:
+	var next_id := _event_sequence
+	_event_sequence += 1
+	return next_id
+
+func _emit_event(
+	event_type: String,
+	message: String,
+	severity: String,
+	visibility: String,
+	payload: Dictionary,
+	source: String,
+	event_day: int,
+	event_hour: int,
+	include_hour: bool
+) -> void:
+	var day_value := event_day
+	if day_value < 0:
+		day_value = day
+	var entry := {
+		"id": _next_event_id(),
+		"type": event_type,
+		"day": day_value,
+		"message": message,
+		"severity": severity,
+		"visibility": visibility,
+	}
+	if include_hour:
+		var hour_value := event_hour
+		if hour_value < 0:
+			hour_value = hour_of_day
+		entry["hour"] = hour_value
+	if source != "":
+		entry["source"] = source
+	if payload != null and not payload.is_empty():
+		entry["payload"] = payload
+	events.append(entry)
+
+func _emit_threat_band_events(pre_threat: int, post_threat: int, sim_day: int) -> void:
+	if post_threat <= pre_threat:
+		return
+	for threshold in THREAT_EVENT_THRESHOLDS:
+		if pre_threat < threshold and post_threat >= threshold:
+			var next_threshold := _next_threshold(THREAT_EVENT_THRESHOLDS, threshold)
+			var forecast := "Next escalation at %d." % next_threshold if next_threshold >= 0 else "No further escalation detected."
+			var message := "External interest confirmed.\nThreat escalating (%d). Pattern shift detected.\nForecast: %s" % [
+				post_threat,
+				forecast,
+			]
+			var payload := {
+				"threshold": threshold,
+				"value": post_threat,
+			}
+			if next_threshold >= 0:
+				payload["next_threshold"] = next_threshold
+			_emit_event(
+				"THREAT_BAND_CROSSED",
+				message,
+				"warn",
+				"sticky",
+				payload,
+				"threat",
+				sim_day,
+				hour_of_day,
+				true
+			)
+
+func _emit_morale_band_events(pre_morale: int, post_morale: int, sim_day: int) -> void:
+	for threshold in MORALE_EVENT_THRESHOLDS:
+		if pre_morale >= threshold and post_morale < threshold:
+			var message := "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies." % post_morale
+			var payload := {
+				"threshold": threshold,
+				"value": post_morale,
+			}
+			_emit_event(
+				"MORALE_BAND_CROSSED",
+				message,
+				"warn",
+				"sticky",
+				payload,
+				"morale",
+				sim_day,
+				hour_of_day,
+				true
+			)
+
+func _emit_materials_exhausted_event(pre_materials: int, post_materials: int, sim_day: int) -> void:
+	if pre_materials > 0 and post_materials <= 0:
+		var message := "Materials depleted.\nForecast: Failures will become permanent."
+		_emit_event(
+			"MATERIALS_EXHAUSTED",
+			message,
+			"warn",
+			"sticky",
+			{},
+			"materials",
+			sim_day,
+			hour_of_day,
+			true
+		)
+
+func _emit_maintenance_shortfall_event(sim_day: int, growth: Dictionary) -> void:
+	var shortfall_value: Variant = growth.get("maintenance_shortfall", false)
+	var shortfall := bool(shortfall_value)
+	if shortfall and not _last_maintenance_shortfall:
+		var materials_before_value: Variant = growth.get("materials_before", 0)
+		var deficit_value: Variant = growth.get("maintenance_deficit", 0)
+		var materials_before := int(materials_before_value)
+		var deficit := int(deficit_value)
+		var message := "Maintenance shortfall. Spares exhausted.\nForecast: Repairs will require cannibalization."
+		var payload := {
+			"value": materials_before,
+			"deficit": deficit,
+		}
+		_emit_event(
+			"MAINTENANCE_SHORTFALL",
+			message,
+			"warn",
+			"sticky",
+			payload,
+			"maintenance",
+			sim_day,
+			hour_of_day,
+			true
+		)
+	_last_maintenance_shortfall = shortfall
+
+func _emit_attention_debt_summary() -> void:
+	if ATTENTION_SUMMARY_INTERVAL_HOURS <= 0:
+		return
+	if hour_of_day % ATTENTION_SUMMARY_INTERVAL_HOURS != 0:
+		return
+	if hour_index == _last_attention_summary_hour_index:
+		return
+	var total: float = expedition_attention
+	var delta: float = total - _last_attention_summary_value
+	_last_attention_summary_hour_index = hour_index
+	_last_attention_summary_value = total
+	if delta <= 0.0:
+		return
+	if day <= INTRO_QUIET_DAYS:
+		return
+	var snapped_total: float = snappedf(total, SIM_FLOAT_SNAP)
+	var snapped_delta: float = snappedf(delta, SIM_FLOAT_SNAP)
+	var message: String = ATTENTION_NEUTRAL_MESSAGE
+	var severity: String = "info"
+	if visibility_triggered:
+		if snapped_total < ATTENTION_DEBT_LOW_THRESHOLD:
+			message = ATTENTION_LOW_MESSAGE
+		elif snapped_total < ATTENTION_DEBT_HIGH_THRESHOLD:
+			message = ATTENTION_WARNING_MESSAGE
+			severity = "warn"
+		else:
+			message = ATTENTION_HIGH_MESSAGE
+			severity = "warn"
+	var payload := {
+		"delta_period": snapped_delta,
+		"total": snapped_total,
+		"source": "expedition",
+		"visibility_triggered": visibility_triggered,
+	}
+	_emit_event(
+		"ATTENTION_DEBT_SUMMARY",
+		message,
+		severity,
+		"player_feed",
+		payload,
+		"expedition",
+		day,
+		hour_of_day,
+		true
+	)
+
+func _mark_visibility_triggered() -> void:
+	if visibility_triggered:
+		return
+	visibility_triggered = true
+
+func _visibility_hook_floor_build() -> void:
+	# Reserved for future floor construction hooks.
+	pass
+
+func _visibility_hook_comms_enabled() -> void:
+	# Reserved for future comms module toggles.
+	pass
+
+func _visibility_hook_extra_rations_policy() -> void:
+	# Reserved for future extra rations policy hooks.
+	pass
+
+func _emit_lever_state_changes() -> void:
+	if _lever_active_state.is_empty():
+		for lever_id in LEVER_STATE_TRACKED:
+			_lever_active_state[lever_id] = _is_lever_active(lever_id)
+		return
+	for lever_id in LEVER_STATE_TRACKED:
+		var was_active_value: Variant = _lever_active_state.get(lever_id, false)
+		var was_active := bool(was_active_value)
+		var is_active := _is_lever_active(lever_id)
+		if was_active == is_active:
+			continue
+		_lever_active_state[lever_id] = is_active
+		var lever_name := _lever_display_name(lever_id)
+		var state := "active" if is_active else "inactive"
+		var message := "%s engaged. Costs will accumulate." % lever_name if is_active else "%s ended. Debts remain." % lever_name
+		var payload := {
+			"lever_id": lever_id,
+			"state": state,
+		}
+		_emit_event(
+			"LEVER_STATE_CHANGED",
+			message,
+			"info",
+			"toast",
+			payload,
+			lever_id,
+			day,
+			hour_of_day,
+			true
+		)
+
+func _is_lever_active(lever_id: String) -> bool:
+	match lever_id:
+		LEVER_RATION_HARDENING:
+			return ration_hardening_hours_left > 0
+		LEVER_LABOR_OVERDRIVE:
+			return labor_overdrive_hours_left > 0
+		LEVER_EXPEDITION_COMPRESSION:
+			return expedition_compression_hours_left > 0
+		LEVER_INFORMATION_THROTTLING:
+			return info_throttle_hours_left > 0
+		_:
+			return false
+
+func _lever_display_name(lever_id: String) -> String:
+	var name_value: Variant = LEVER_DISPLAY_NAMES.get(lever_id, "")
+	var lever_name := str(name_value)
+	return lever_name if lever_name != "" else lever_id.capitalize()
+
+func _next_threshold(thresholds: Array[int], current: int) -> int:
+	for threshold in thresholds:
+		if threshold > current:
+			return threshold
+	return -1
 
 func _module_key(f: int, x: int, y: int) -> String:
 	return "%d:%d:%d" % [f, x, y]
+
+func _is_module_online(floor_idx: int, x: int, y: int) -> bool:
+	if tower == null:
+		return false
+	if not tower.has_cell(floor_idx, x, y):
+		return false
+	if _is_module_abandoned(floor_idx, x, y):
+		return false
+	return tower.is_module_enabled(floor_idx, x, y)
+
+func _module_snapshot_filtered_deltas(raw: Dictionary) -> Dictionary:
+	var filtered: Dictionary = {}
+	if raw == null:
+		return filtered
+	var keys := raw.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var value: Variant = raw.get(key, null)
+		if value == null:
+			continue
+		var numeric: int = 0
+		if value is int:
+			numeric = int(value)
+		elif value is float:
+			numeric = int(value)
+		else:
+			continue
+		if numeric == 0:
+			continue
+		filtered[key] = numeric
+	return filtered
+
+func _refresh_module_snapshots(power_map: Dictionary) -> void:
+	if power_map == null:
+		power_map = {}
+	var snapshots: Array[Dictionary] = []
+	if tower == null or db == null:
+		_last_module_snapshots = snapshots
+		return
+	for floor_idx in range(tower.floor_count()):
+		var grid: Array = tower.floors[floor_idx] as Array
+		if grid == null:
+			continue
+		for y in range(tower.height):
+			var row: Array = grid[y] as Array
+			if row == null:
+				continue
+			for x in range(tower.width):
+				var module_id: Variant = row[x]
+				if module_id == null:
+					continue
+				var def := db.get_def(str(module_id))
+				if def == null:
+					continue
+				var key := _module_key(floor_idx, x, y)
+				var run_entry: Dictionary = {}
+				if power_map.has(key) and power_map[key] is Dictionary:
+					run_entry = power_map[key]
+				var snapshot: Dictionary = {
+					"id": key,
+					"type": def.id,
+					"name": def.name,
+					"floor": floor_idx,
+					"x": x,
+					"y": y,
+					"powered": bool(run_entry.get("powered", false)),
+					"online": _is_module_online(floor_idx, x, y),
+				}
+				var deltas_candidate: Variant = run_entry.get("deltas", null)
+				if deltas_candidate is Dictionary:
+					var filtered := _module_snapshot_filtered_deltas(deltas_candidate)
+					if not filtered.is_empty():
+						snapshot["deltas"] = filtered
+				snapshots.append(snapshot)
+	_last_module_snapshots = snapshots
+
+func module_snapshots() -> Array[Dictionary]:
+	var copies: Array[Dictionary] = []
+	for snapshot in _last_module_snapshots:
+		if snapshot is Dictionary:
+			copies.append(snapshot.duplicate(true))
+		else:
+			copies.append({})
+	return copies
 
 func _parse_module_instance_id(instance_id: String) -> Dictionary:
 	if instance_id == "":
@@ -594,10 +1162,21 @@ func _resolve_module_target(payload: Dictionary, sim_tower: Tower) -> Dictionary
 		if target_id == "":
 			return {}
 		for f in range(sim_tower.floors.size()):
-			var grid = sim_tower.floors[f]
+			var floor_data: Variant = sim_tower.floors[f]
+			if floor_data == null or not (floor_data is Array):
+				continue
+			var grid: Array = floor_data as Array
 			for y in range(sim_tower.height):
+				if y < 0 or y >= grid.size():
+					continue
+				var row_candidate: Variant = grid[y]
+				if row_candidate == null or not (row_candidate is Array):
+					continue
+				var row: Array = row_candidate as Array
 				for x in range(sim_tower.width):
-					if grid[y][x] == target_id:
+					if x < 0 or x >= row.size():
+						continue
+					if row[x] == target_id:
 						return {"f": f, "x": x, "y": y}
 	return {}
 
@@ -639,12 +1218,38 @@ func _apply_module_deltas_stably(sim_res: Resources, deltas: Dictionary) -> void
 			assert(raw is int or raw is float, "Module delta for '%s' must be numeric." % key)
 			sim_res.add_delta(key, int(raw))
 
+func _module_inputs_available(sim_res: Resources, inputs: Dictionary) -> bool:
+	if inputs == null:
+		return true
+	var keys := inputs.keys()
+	keys.sort()
+	for key in keys:
+		var amount_value: Variant = inputs.get(key, 0)
+		var amount := int(amount_value)
+		if amount <= 0:
+			continue
+		var current_amount: int = sim_res.get_amount(key)
+		if current_amount < amount:
+			return false
+	return true
+
+func _consume_module_inputs(sim_res: Resources, inputs: Dictionary) -> void:
+	if inputs == null:
+		return
+	var keys := inputs.keys()
+	keys.sort()
+	for key in keys:
+		var amount_value: Variant = inputs.get(key, 0)
+		var amount := int(amount_value)
+		if amount == 0:
+			continue
+		var current_amount: int = sim_res.get_amount(key)
+		sim_res.set_amount(key, current_amount - amount)
+
 func _evaluate_incidents(sim_day: int, run_seed: int, sim_res: Resources) -> Array[String]:
 	var incidents: Array[String] = []
-
-	# Deterministic RNG derived from seed + day. No global RNG mutation.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(run_seed) * 73856093 + int(sim_day) * 19349663
+	var incident_seed := int(run_seed) * RNG_BASE_MULTIPLIER + int(sim_day) * RNG_DAY_MULTIPLIER
+	var tracker := _create_rng_tracker(sim_day, PHASE_INCIDENTS, "incident_rolls", RNG_OFFSET_INCIDENTS, incident_seed)
 
 	# INCIDENT_DEFS order is load-bearing for determinism; do not reorder.
 	for incident_def in IncidentDefsRef.INCIDENT_DEFS:
@@ -653,7 +1258,7 @@ func _evaluate_incidents(sim_day: int, run_seed: int, sim_res: Resources) -> Arr
 			continue
 
 		var chance: float = float(incident_def.get("chance", 0.0))
-		var roll: float = rng.randf()
+		var roll: float = _rng_randf(tracker)
 		if roll <= chance:
 			var incident_id: String = str(incident_def.get("id", "unknown"))
 			var severity: String = str(incident_def.get("severity", "na"))
@@ -701,7 +1306,9 @@ func _apply_lever_output_modifiers(deltas: Dictionary) -> Dictionary:
 	):
 		return deltas
 	var adjusted: Dictionary = {}
-	for key in deltas.keys():
+	var keys := deltas.keys()
+	keys.sort()
+	for key in keys:
 		var value: int = int(deltas[key])
 		if value > 0:
 			var multiplier := labor_output_multiplier_today * info_misalloc_multiplier_today
@@ -718,13 +1325,15 @@ func _scale_deltas_for_workforce(deltas: Dictionary, multiplier: float) -> Dicti
 	if effective_multiplier >= 1.0:
 		return deltas
 	var scaled: Dictionary = {}
-	for key in deltas.keys():
+	var keys := deltas.keys()
+	keys.sort()
+	for key in keys:
 		scaled[key] = _scale_delta_for_workforce(int(deltas[key]), effective_multiplier)
 	return scaled
 
 func _recompute_expedition_heat() -> void:
 	var weighted: int = expedition_count_total + (expedition_streak * 3) + (expedition_recent_score * 2)
-	expedition_heat = int(weighted / 4)
+	expedition_heat = int(float(weighted) / 4.0)
 
 func _start_expedition_day() -> void:
 	expedition_happened_today = false
@@ -930,7 +1539,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 			if int(conversion_burn_counts.get(from_key, 0)) >= CONVERSION_BURN_THRESHOLD:
 				_log_lever_event(sim_day, LEVER_EMERGENCY_CONVERSION, entry, "REJECTED: option burned out", "")
 				continue
-			var available := int(sim_res.get(from_key))
+			var available: int = sim_res.get_amount(from_key)
 			if available <= 0:
 				_log_lever_event(sim_day, LEVER_EMERGENCY_CONVERSION, entry, "REJECTED: insufficient", "")
 				continue
@@ -942,8 +1551,9 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 				)
 			)
 			var produced := int(floor(float(used) * efficiency))
-			sim_res.set(from_key, available - used)
-			sim_res.set(to_key, int(sim_res.get(to_key)) + produced)
+			sim_res.set_amount(from_key, available - used)
+			var target_before: int = sim_res.get_amount(to_key)
+			sim_res.set_amount(to_key, target_before + produced)
 			conversion_scar += CONVERSION_SCAR_PER_USE
 			conversion_burn_counts[from_key] = int(conversion_burn_counts.get(from_key, 0)) + 1
 			_obs_push(obs, "CONVERT@%s>%s@%d" % [from_key, to_key, produced])
@@ -1082,12 +1692,12 @@ func _cmd_set_module_priority(payload: Dictionary, sim_tower: Tower, obs: Array[
 
 func _rng_seed_for_expedition(run_seed: int, sim_day: int, total_count: int, day_index: int) -> int:
 	# Local, deterministic RNG seed. No global RNG mutation.
-	return (
-		int(run_seed) * 73856093
-		+ int(sim_day) * 19349663
-		+ int(total_count) * 83492791
-		+ int(day_index) * 2654435761
-	)
+	var accumulator: int = int(run_seed)
+	accumulator += int(sim_day) * RNG_DAY_MULTIPLIER
+	accumulator += int(total_count) * 83492791
+	accumulator += int(day_index) * 2654435761
+	accumulator = int((accumulator * RNG_BASE_MULTIPLIER) & RNG_CONTEXT_SEED_MASK)
+	return accumulator
 
 func _schedule_expedition_lag(
 	sim_day: int,
@@ -1097,23 +1707,23 @@ func _schedule_expedition_lag(
 	heat_at_schedule: int,
 	total_count: int
 ) -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = _rng_seed_for_expedition(run_seed, sim_day, total_count, day_index)
+	var expedition_seed: int = _rng_seed_for_expedition(run_seed, sim_day, total_count, day_index)
+	var tracker := _create_rng_tracker(sim_day, PHASE_EXPEDITIONS, "expedition_lag", RNG_OFFSET_EXPEDITIONS, expedition_seed)
 
-	var delay: int = 3 + int(rng.randi() % 3) # 3..5 inclusive
+	var delay: int = 3 + int(_rng_randi(tracker) % 3) # 3..5 inclusive
 	if heat_at_schedule >= EXPEDITION_HEAT_DELAY_THRESHOLD:
-		delay = 3 + int(rng.randi() % 2) # 3..4 inclusive
+		delay = 3 + int(_rng_randi(tracker) % 2) # 3..4 inclusive
 
 	var retaliation_chance: int = 50 + min(heat_at_schedule * EXPEDITION_KIND_BIAS_PER_HEAT, EXPEDITION_KIND_BIAS_CAP)
-	var kind_roll: int = int(rng.randi() % 100)
+	var kind_roll: int = int(_rng_randi(tracker) % 100)
 	var kind: String = "RETALIATION_RISK" if kind_roll < retaliation_chance else "SUPPLY_CHAIN_FRICTION"
 
 	var magnitude_base: int = 0
 	if kind == "RETALIATION_RISK":
-		magnitude_base = 2 + int(rng.randi() % 5) # 2..6 threat
+		magnitude_base = 2 + int(_rng_randi(tracker) % 5) # 2..6 threat
 	else:
-		magnitude_base = 1 + int(rng.randi() % 3) # 1..3 morale
-	var heat_bonus: int = int(heat_at_schedule / EXPEDITION_MAG_HEAT_DIV)
+		magnitude_base = 1 + int(_rng_randi(tracker) % 3) # 1..3 morale
+	var heat_bonus: int = int(float(heat_at_schedule) / float(EXPEDITION_MAG_HEAT_DIV))
 	var magnitude: int = min(magnitude_base + heat_bonus, EXPEDITION_MAG_CAP)
 
 	var entry := {
@@ -1137,6 +1747,8 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 	if crew <= 0:
 		_obs_push(obs, "EXPEDITION_ABORT@NO_CREW")
 		return
+
+	_mark_visibility_triggered()
 
 	expedition_commands_today += 1
 	expedition_count_total += 1
@@ -1247,6 +1859,133 @@ func _phase_delayed_consequences(sim_day: int, sim_res: Resources, obs: Array[St
 				continue
 		_obs_push(obs, "EXPEDITION_LAG_TRIGGER@%s@M%d@heat=%d" % [kind, magnitude, heat_at_schedule])
 
+func _enqueue_consequence(entry: Dictionary) -> void:
+	if entry == null:
+		return
+	entry["idx"] = _consequence_insertion_counter
+	_consequence_insertion_counter += 1
+	_consequence_queue.append(entry)
+
+func _process_consequence_queue(sim_day: int, sim_res: Resources, obs: Array[String], tracker: Dictionary) -> Array[String]:
+	var logs: Array[String] = []
+	if _consequence_queue.is_empty():
+		return logs
+
+	var due: Array[Dictionary] = []
+	var remaining: Array[Dictionary] = []
+	for entry in _consequence_queue:
+		if int(entry.get("due_day", -1)) == sim_day:
+			due.append(entry)
+		else:
+			remaining.append(entry)
+
+	if due.is_empty():
+		return logs
+
+	due.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_due: int = int(a.get("due_day", -1))
+		var b_due: int = int(b.get("due_day", -1))
+		if a_due != b_due:
+			return a_due < b_due
+		return int(a.get("idx", 0)) < int(b.get("idx", 0))
+	)
+
+	_consequence_queue = remaining
+	for entry in due:
+		var kind: String = str(entry.get("kind", ""))
+		match kind:
+			"STRUCT_INCIDENT":
+				logs.append_array(_process_structural_incident_entry(entry, sim_res, obs, tracker))
+			"STRUCT_COLLAPSE_TRY":
+				_structural_collapse_scheduled = false
+				logs.append_array(_process_structural_collapse_entry(sim_res, obs, tracker))
+
+	return logs
+
+func _structural_level_for_strain(strain: float) -> int:
+	var level := -1
+	for i in range(STRUCTURAL_TELEGRAPH_THRESHOLDS.size()):
+		if strain >= STRUCTURAL_TELEGRAPH_THRESHOLDS[i]:
+			level = i
+	return level
+
+func _emit_structural_telegraph(sim_day: int, level: int, obs: Array[String]) -> void:
+	if level < 0 or level >= STRUCTURAL_TELEGRAPH_EVENTS.size():
+		return
+	var token := STRUCTURAL_TELEGRAPH_EVENTS[level]
+	_obs_push(obs, token)
+	if level >= STRUCTURAL_INCIDENT_IDS.size():
+		return
+	var incident_id := STRUCTURAL_INCIDENT_IDS[level]
+	if incident_id in ["support_shift", "floor_sag"]:
+		_enqueue_consequence({
+			"due_day": sim_day + STRUCTURAL_TELEGRAPH_DELAY_DAYS,
+			"kind": "STRUCT_INCIDENT",
+			"incident_id": incident_id,
+		})
+
+func _structural_incident_def_by_id(incident_id: String) -> Dictionary:
+	for incident_def in IncidentDefsRef.STRUCTURAL_INCIDENT_DEFS:
+		if str(incident_def.get("id", "")) == incident_id:
+			return incident_def
+	return {}
+
+func _process_structural_incident_entry(entry: Dictionary, sim_res: Resources, obs: Array[String], tracker: Dictionary) -> Array[String]:
+	var logs: Array[String] = []
+	var incident_id := str(entry.get("incident_id", ""))
+	if incident_id == "":
+		return logs
+	var incident_def := _structural_incident_def_by_id(incident_id)
+	if incident_def.is_empty():
+		return logs
+
+	var chance := float(incident_def.get("chance", 0.0))
+	var roll := _rng_randf(tracker)
+	if roll <= chance:
+		var severity := str(incident_def.get("severity", ""))
+		var entry_str := "%s[%s]" % [incident_id, severity] if severity != "" else incident_id
+		logs.append(entry_str)
+		sim_res.morale -= STRUCTURAL_WARNING_MORALE_PENALTY
+		_obs_push(obs, "STRUCT_WARN@%s" % incident_id)
+		_structural_warning_logged = true
+
+	return logs
+
+func _process_structural_collapse_entry(sim_res: Resources, obs: Array[String], tracker: Dictionary) -> Array[String]:
+	var logs: Array[String] = []
+	if not _structural_warning_logged:
+		return logs
+
+	var collapse_def := _structural_incident_def_by_id("structural_breach")
+	if collapse_def.is_empty():
+		return logs
+
+	if _structural_high_strain_days < STRUCTURAL_COLLAPSE_MIN_DAYS:
+		return logs
+
+	if sim_res.strain < STRUCTURAL_COLLAPSE_MIN_STRAIN:
+		return logs
+
+	var base_chance := float(collapse_def.get("chance", 0.0))
+	base_chance = clamp(
+		base_chance + (sim_res.collapse_debt * STRUCTURAL_COLLAPSE_DEBT_SCALE),
+		0.0,
+		0.95
+	)
+	var roll := _rng_randf(tracker)
+	if roll <= base_chance:
+		var severity := str(collapse_def.get("severity", ""))
+		var entry_str := "structural_breach[%s]" % severity if severity != "" else "structural_breach"
+		logs.append(entry_str)
+		sim_res.morale -= STRUCTURAL_COLLAPSE_MORALE_PENALTY
+		sim_res.materials = max(sim_res.materials - STRUCTURAL_COLLAPSE_MATERIALS_LOSS, 0)
+		sim_res.collapse_debt += STRUCTURAL_COLLAPSE_DEBT_PENALTY
+		sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+		_obs_push(obs, "STRUCT_COLLAPSE@%0.2f" % sim_res.collapse_debt)
+		_structural_warning_logged = false
+
+	return logs
+
 func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 	# Phase A: baselines (irreversible drift + per-day resets)
 	var staying_step: float = 1.0
@@ -1273,32 +2012,49 @@ func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 	sim_res.power_used = 0
 
 func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, obs: Array[String]) -> Dictionary:
-	# Phase B: production & consumption
+	# Phase B: production & consumption. Modules require both power and inputs;
+	# per spec we avoid partial operation so nothing runs unless both are satisfied.
+	var food_before := sim_res.food
 	var food_consumption := int(ceil(float(sim_res.population) * food_ration * ration_consumption_multiplier_today))
 	var water_consumption := int(ceil(float(sim_res.population) * water_ration * ration_consumption_multiplier_today))
 	sim_res.add_delta("food", -food_consumption)
 	sim_res.add_delta("water", -water_consumption)
 
 	var instances: Array[ModuleInstance] = []
-	var total_capacity: int = 0
 	var order_index: int = 0
+	var total_capacity: int = 0
 	var powered_count: int = 0
+	var applied_food_from_modules: int = 0
+	var module_power_map: Dictionary = {}
+	var placed_module_count: int = 0
 
 	for f in range(sim_tower.floors.size()):
-		var grid = sim_tower.floors[f]
+		var floor_data: Variant = sim_tower.floors[f]
+		if floor_data == null or not (floor_data is Array):
+			continue
+		var grid: Array = floor_data as Array
 		for y in range(sim_tower.height):
+			if y < 0 or y >= grid.size():
+				continue
+			var row_candidate: Variant = grid[y]
+			if row_candidate == null or not (row_candidate is Array):
+				continue
+			var row: Array = row_candidate as Array
 			for x in range(sim_tower.width):
-				var id = grid[y][x]
-				if id == null:
+				if x < 0 or x >= row.size():
 					continue
-				if not sim_tower.is_module_enabled(f, x, y):
-					_obs_push(obs, "DISABLED_MODULE@%d:%d:%d" % [f, x, y])
+				var module_id: Variant = row[x]
+				if module_id == null:
 					continue
 				if _is_module_abandoned(f, x, y):
 					_obs_push(obs, "ABANDONED_MODULE@%d:%d:%d" % [f, x, y])
 					continue
+				placed_module_count += 1
+				if not sim_tower.is_module_enabled(f, x, y):
+					_obs_push(obs, "DISABLED_MODULE@%d:%d:%d" % [f, x, y])
+					continue
 
-				var def: ModuleDef = sim_db.get_def(id)
+				var def: ModuleDef = sim_db.get_def(module_id)
 				if def == null:
 					continue
 
@@ -1313,7 +2069,6 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 				order_index += 1
 				instances.append(inst)
 
-				# Generators (and any supply) contribute regardless of priority/power availability
 				sim_res.power_supply += def.power_supply
 
 	instances.sort_custom(func(a: ModuleInstance, b: ModuleInstance) -> bool:
@@ -1332,6 +2087,7 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 		return a.order_index < b.order_index
 	)
 
+	var module_count: int = placed_module_count
 	var remaining_power: int = sim_res.power_supply
 	var total_noise: int = 0
 	var total_heat: int = 0
@@ -1340,44 +2096,91 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 		var def := inst.def
 		var needs: int = def.power_demand
 		inst.power_required = needs
-		inst.powered = (needs == 0) or (remaining_power >= needs)
-		inst.power_allocated = needs if inst.powered else 0
+		var candidate_power_enabled := (needs == 0) or (remaining_power >= needs)
+		inst.powered = candidate_power_enabled
+		inst.power_allocated = needs if candidate_power_enabled else 0
 
-		if inst.powered:
+		var module_key := _module_key(inst.floor_index, inst.x, inst.y)
+		var snapshot_entry: Dictionary = {"powered": false}
+
+		var inputs_ready := _module_inputs_available(sim_res, def.inputs_per_day)
+		if candidate_power_enabled and inputs_ready:
 			remaining_power -= needs
 			sim_res.power_used += needs
 			powered_count += 1
+			_consume_module_inputs(sim_res, def.inputs_per_day)
 			var deltas := inst.compute_resource_deltas(sim_res)
 			var lever_adjusted := _apply_lever_output_modifiers(deltas)
 			var scaled := _scale_deltas_for_workforce(lever_adjusted, workforce_multiplier_today)
+			if scaled.has("food"):
+				applied_food_from_modules += int(scaled.get("food", 0))
 			_apply_module_deltas_stably(sim_res, scaled)
 			total_capacity += def.delta_capacity
 			total_noise += def.noise
 			total_heat += def.heat
+			snapshot_entry["powered"] = true
+			snapshot_entry["deltas"] = scaled.duplicate(true)
 		else:
-			# Unpowered penalty (light, for now)
-			sim_res.add_delta("morale", -1)
+			inst.powered = false
+			inst.power_allocated = 0
+			if candidate_power_enabled and not inputs_ready:
+				_obs_push(obs, "MODULE_INPUT_STARVED@%s" % module_key)
+			else:
+				_obs_push(obs, "MODULE_UNPOWERED@%s" % module_key)
+
+		module_power_map[module_key] = snapshot_entry
 
 	sim_res.apply_deltas()
+	_refresh_module_snapshots(module_power_map)
+
+	var after_food := sim_res.food
+	var expected_food: int = max(food_before - food_consumption + applied_food_from_modules, 0)
+	var discrepancy: int = after_food - expected_food
+	_last_production_metrics = {
+		"food_before": food_before,
+		"food_consumption": food_consumption,
+		"applied_food": applied_food_from_modules,
+		"after_food": after_food,
+		"expected_food": expected_food,
+		"discrepancy": discrepancy,
+	}
+	if enable_food_debug_log and (food_consumption > 0 or applied_food_from_modules != 0 or discrepancy != 0):
+		var status := "ok" if discrepancy == 0 else "discrep=%d" % discrepancy
+		print("FOOD_SUMMARY consumed=%d produced=%d before=%d after=%d expected=%d [%s]" % [
+			food_consumption,
+			applied_food_from_modules,
+			food_before,
+			after_food,
+			expected_food,
+			status,
+		])
 
 	return {
 		"powered_count": powered_count,
+		"module_count": module_count,
 		"total_capacity": total_capacity,
 		"total_noise": total_noise,
 		"total_heat": total_heat,
 	}
 
-func _phase_growth_dependency(sim_res: Resources, powered_count: int, obs: Array[String]) -> Dictionary:
+func _phase_growth_dependency(sim_res: Resources, module_count: int, _powered_count: int, obs: Array[String]) -> Dictionary:
 	# Phase C: growth & dependency (maintenance / fragility)
-	var maintenance_cost: int = int(ceil(float(powered_count) * 0.5))
+	# Strain amplifies maintenance burden deterministically per structural risk contract.
+	var strain_penalty: float = max(sim_res.strain - MAINTENANCE_STRAIN_THRESHOLD, 0.0)
+	var maintenance_multiplier: float = 1.0 + (strain_penalty * MAINTENANCE_STRAIN_MULTIPLIER)
+	var targeted_modules: int = max(module_count, 0)
+	# All enabled modules contribute to maintenance even when unpowered per spec.
+	var maintenance_cost: int = int(ceil(float(targeted_modules) * MAINTENANCE_COST_PER_MODULE * maintenance_multiplier))
 	var maintenance_shortfall: bool = false
 	var maintenance_morale_penalty: int = 0
+	var materials_before: int = sim_res.materials
+	var maintenance_deficit: int = 0
 
 	if maintenance_cost > 0:
-		var materials_before: int = sim_res.materials
 		sim_res.materials = max(sim_res.materials - maintenance_cost, 0)
 		if materials_before < maintenance_cost:
 			maintenance_shortfall = true
+			maintenance_deficit = maintenance_cost - materials_before
 			maintenance_morale_penalty = 1
 			# Maintenance shortfalls degrade morale and add detectability pressure.
 			sim_res.morale -= maintenance_morale_penalty
@@ -1388,6 +2191,9 @@ func _phase_growth_dependency(sim_res: Resources, powered_count: int, obs: Array
 		"maintenance_cost": maintenance_cost,
 		"maintenance_shortfall": maintenance_shortfall,
 		"maintenance_morale_penalty": maintenance_morale_penalty,
+		"materials_before": materials_before,
+		"maintenance_deficit": maintenance_deficit,
+		"module_count": targeted_modules,
 	}
 
 func _apply_throttled_morale_penalty(sim_res: Resources, amount: int, obs: Array[String], tag: String) -> void:
@@ -1440,19 +2246,84 @@ func _phase_pressure_accrual(
 	if expedition_morale_penalty_today > 0:
 		_apply_throttled_morale_penalty(sim_res, expedition_morale_penalty_today, obs, "EXPEDITION")
 
-	var power_signature := sim_res.power_used
-	sim_res.threat += int(total_noise * 0.5) + int(total_heat * 0.5) + int(power_signature * 0.2)
-
+	# Derive threat and attention from the same noisy/heat/power signature per specification.
+	var threat_delta: int = _signature_threat_delta(total_noise, total_heat, sim_res.power_used, sim_res.power_supply)
+	sim_res.threat += threat_delta
 	if expedition_threat_today > 0:
 		sim_res.threat += expedition_threat_today
-
 	if lever_threat_bonus_today > 0:
 		sim_res.threat += lever_threat_bonus_today
+
+	var attention_delta: float = _signature_attention_delta(total_noise, total_heat, sim_res.attention_multiplier)
+	if attention_delta > 0.0:
+		expedition_attention += attention_delta
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 
 	# If morale is collapsing, people make mistakes -> more threat
 	var morale_for_threat: int = sim_res.morale + maintenance_morale_penalty
 	if morale_for_threat <= 10:
 		sim_res.threat += 1
+
+func _phase_structural_risk(
+	sim_day: int,
+	sim_res: Resources,
+	growth: Dictionary,
+	obs: Array[String]
+) -> Array[String]:
+	var incidents: Array[String] = []
+	var tracker := _create_rng_tracker(sim_day, PHASE_STRUCTURAL, "consequence_queue", RNG_OFFSET_STRUCTURAL)
+	incidents.append_array(_process_consequence_queue(sim_day, sim_res, obs, tracker))
+
+	var module_count := int(growth.get("module_count", 0))
+	var maintenance_deficit := int(growth.get("maintenance_deficit", 0))
+	var strain_gain := float(module_count) * STRUCTURAL_STRAIN_PER_MODULE
+	if maintenance_deficit > 0:
+		strain_gain += float(maintenance_deficit) * STRUCTURAL_STRAIN_PER_MAINT_DEFICIT
+
+	sim_res.strain += strain_gain
+	sim_res.strain = max(sim_res.strain - STRUCTURAL_STRAIN_DECAY, 0.0)
+	sim_res.strain = snapped(sim_res.strain, SIM_FLOAT_SNAP)
+
+	if maintenance_deficit > 0:
+		sim_res.collapse_debt += float(maintenance_deficit) * STRUCTURAL_COLLAPSE_DEBT_SCALE
+	elif sim_res.collapse_debt > 0.0:
+		sim_res.collapse_debt = max(sim_res.collapse_debt - STRUCTURAL_COLLAPSE_DECAY, 0.0)
+	sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+
+	var prev_level := _structural_telegraph_level
+	var new_level := _structural_level_for_strain(sim_res.strain)
+	if new_level > prev_level:
+		_emit_structural_telegraph(sim_day, new_level, obs)
+	_structural_telegraph_level = new_level
+
+	if sim_res.strain >= STRUCTURAL_COLLAPSE_MIN_STRAIN:
+		_structural_high_strain_days += 1
+	else:
+		_structural_high_strain_days = 0
+
+	if _structural_high_strain_days >= STRUCTURAL_COLLAPSE_MIN_DAYS and not _structural_collapse_scheduled:
+		_enqueue_consequence({
+			"due_day": sim_day + STRUCTURAL_COLLAPSE_DELAY_DAYS,
+			"kind": "STRUCT_COLLAPSE_TRY",
+		})
+		_structural_collapse_scheduled = true
+	elif _structural_high_strain_days < STRUCTURAL_COLLAPSE_MIN_DAYS:
+		_structural_collapse_scheduled = false
+
+	return incidents
+
+func _signature_threat_delta(noise: int, heat: int, power_used: int, power_supply: int) -> int:
+	var noise_threat := int(ceil(float(noise) * THREAT_PER_NOISE))
+	var heat_threat := int(ceil(float(heat) * THREAT_PER_HEAT))
+	var power_short: int = max(power_used - power_supply, 0)
+	var power_threat := int(ceil(float(power_short) * THREAT_PER_POWER))
+	return noise_threat + heat_threat + power_threat
+
+func _signature_attention_delta(noise: int, heat: int, multiplier: float) -> float:
+	var base: float = float(noise + heat) * 0.05
+	var clamped_multiplier: float = max(multiplier, 0.0)
+	var amount: float = base * clamped_multiplier
+	return snapped(amount, SIM_FLOAT_SNAP)
 
 func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String]) -> Dictionary:
 	# Phase E: resolution (counters, population loss, clamp)
@@ -1507,6 +2378,8 @@ func _emit_observations(pre_threat: int, sim_res: Resources, obs: Array[String])
 
 func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB) -> Array[String]:
 	var pre_threat: int = sim_res.threat
+	var pre_morale: int = sim_res.morale
+	var pre_materials: int = sim_res.materials
 	var obs: Array[String] = []
 
 	# Phase -1: levers (policy effects + queued conversions)
@@ -1522,13 +2395,27 @@ func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Reso
 	var production := _phase_production(sim_tower, sim_res, sim_db, obs)
 
 	# Phase C: growth & dependency
-	var growth := _phase_growth_dependency(sim_res, int(production.get("powered_count", 0)), obs)
+	var growth := _phase_growth_dependency(
+		sim_res,
+		int(production.get("module_count", 0)),
+		int(production.get("powered_count", 0)),
+		obs
+	)
 
 	# Phase D: pressure accrual
 	_phase_pressure_accrual(sim_res, production, growth, obs, sim_day)
+	var structural_logs := _phase_structural_risk(sim_day, sim_res, growth, obs)
 
 	# Phase E: resolution
 	_phase_resolution(sim_res, growth, obs)
+
+	var post_threat: int = sim_res.threat
+	var post_morale: int = sim_res.morale
+	var post_materials: int = sim_res.materials
+	_emit_threat_band_events(pre_threat, post_threat, sim_day)
+	_emit_morale_band_events(pre_morale, post_morale, sim_day)
+	_emit_materials_exhausted_event(pre_materials, post_materials, sim_day)
+	_emit_maintenance_shortfall_event(sim_day, growth)
 
 	# Phase F: exit checks (stub)
 	_phase_exit_checks(sim_res, obs)
@@ -1546,7 +2433,13 @@ func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Reso
 	var incident_logs := _evaluate_incidents(sim_day, run_seed, sim_res)
 	var threshold_logs := _evaluate_threat_thresholds(pre_threat, sim_res.threat)
 	_last_obs_tokens = obs
-	return _merge_incident_lists(maintenance_logs, _merge_incident_lists(threshold_logs, incident_logs))
+	return _merge_incident_lists(
+		maintenance_logs,
+		_merge_incident_lists(
+			structural_logs,
+			_merge_incident_lists(threshold_logs, incident_logs)
+		)
+	)
 
 func _format_incidents(incidents: Array[String]) -> String:
 	if incidents.is_empty():
@@ -1572,23 +2465,67 @@ func _format_log_line(_day: int, _seed: int, _res: Resources, incidents: Array[S
 		_res.snapshot(),
 	]
 
+func _state_signature() -> String:
+	var parts: Array[String] = []
+	parts.append("day=%d" % day)
+	parts.append("hour_idx=%d" % hour_index)
+	parts.append("res=%s" % res.snapshot())
+	parts.append("staying=%.2f" % snapped(res.staying_index, SIM_FLOAT_SNAP))
+	parts.append("morale_ceiling=%.2f" % res.morale_ceiling)
+	parts.append("attention_mult=%.2f" % res.attention_multiplier)
+	parts.append("expedition_attention=%.2f" % snapped(expedition_attention, SIM_FLOAT_SNAP))
+	parts.append("strain=%.2f" % snapped(res.strain, SIM_FLOAT_SNAP))
+	parts.append("collapse_debt=%.2f" % snapped(res.collapse_debt, SIM_FLOAT_SNAP))
+	parts.append("ration_scar=%.2f" % snapped(ration_scar, SIM_FLOAT_SNAP))
+	parts.append("labor_scar=%.2f" % snapped(labor_scar, SIM_FLOAT_SNAP))
+	parts.append("conversion_scar=%d" % conversion_scar)
+	var abandoned_keys := abandoned_modules.keys()
+	abandoned_keys.sort()
+	for key in abandoned_keys:
+		parts.append("abandoned=%s" % key)
+	parts.append("visibility=%s" % str(visibility_triggered))
+	return "|".join(parts)
+
+func _simulate_state_signatures(days_to_run: int, run_seed: int, commands_by_day: Dictionary) -> Dictionary:
+	_reset_rng_usage_log()
+	var sim := Sim.new()
+	sim.sim_seed = run_seed
+	sim._setup_default_state()
+	sim.day = 0
+	var signatures: Array[String] = []
+	if commands_by_day == null:
+		commands_by_day = {}
+	for i in range(days_to_run):
+		sim.day = i + 1
+		sim.clear_commands()
+		var scheduled: Array = commands_by_day.get(sim.day, [])
+		for cmd in _clone_command_array(scheduled):
+			sim.enqueue_command(cmd)
+		sim._step_day_core(sim.day, run_seed, sim.tower, sim.res, sim.db)
+		signatures.append(sim._state_signature())
+	return {
+		"hashes": signatures,
+		"rng_log": sim.get_rng_usage_history(),
+	}
+
 func debug_run_determinism(days_to_run: int, run_seed: int) -> void:
-	var run_a := _simulate_days(days_to_run, run_seed)
-	var run_b := _simulate_days(days_to_run, run_seed)
+	var result_a := _simulate_state_signatures(days_to_run, run_seed, {})
+	var result_b := _simulate_state_signatures(days_to_run, run_seed, {})
+	var hashes_a: Array[String] = result_a.get("hashes", [])
+	var hashes_b: Array[String] = result_b.get("hashes", [])
 
-	for line in run_a:
-		print(line)
-	for line in run_b:
-		print(line)
-
-	if run_a.size() != run_b.size():
-		print("DETERMINISM MISMATCH size=%d/%d" % [run_a.size(), run_b.size()])
-		return
-
-	for i in range(run_a.size()):
-		if run_a[i] != run_b[i]:
-			print("DETERMINISM MISMATCH day=%d" % [i + 1])
+	var max_days: int = max(hashes_a.size(), hashes_b.size())
+	for i in range(max_days):
+		var hash_a := hashes_a[i] if i < hashes_a.size() else "MISSING"
+		var hash_b := hashes_b[i] if i < hashes_b.size() else "MISSING"
+		if hash_a != hash_b:
+			print("DETERMINISM MISMATCH day=%d\nA:%s\nB:%s" % [i + 1, hash_a, hash_b])
+			print("RNG LOG A:", result_a.get("rng_log"))
+			print("RNG LOG B:", result_b.get("rng_log"))
 			return
+	print("DETERMINISM OK")
+	print("RNG LOG A:", result_a.get("rng_log"))
+	print("RNG LOG B:", result_b.get("rng_log"))
 
 func debug_run_days(days_to_run: int, run_seed: int) -> void:
 	var lines := _simulate_days(days_to_run, run_seed)
