@@ -47,7 +47,10 @@ const MODULE_DELTA_KEYS: Array[String] = [
 ]
 
 const THREAT_EVENT_THRESHOLDS: Array[int] = [40, 80, 120, 160, 200]
-const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 15]
+const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 20]
+const VOLUNTARY_COMPLIANCE_THRESHOLD: int = 20
+const VOLUNTARY_COMPLIANCE_MESSAGE_FORMAT: String = "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies."
+const MORALE_WARNING_MESSAGE_FORMAT: String = "Morale slipping (%d). Forecast: Tensions continue to rise if current policies hold."
 const ATTENTION_SUMMARY_INTERVAL_HOURS := 6
 const INTRO_QUIET_DAYS := 1
 const ATTENTION_DEBT_LOW_THRESHOLD := 10.0
@@ -870,10 +873,15 @@ func _emit_threat_band_events(pre_threat: int, post_threat: int, sim_day: int) -
 				true
 			)
 
+func _morale_band_message(threshold: int, post_morale: int) -> String:
+	if threshold == VOLUNTARY_COMPLIANCE_THRESHOLD:
+		return VOLUNTARY_COMPLIANCE_MESSAGE_FORMAT % post_morale
+	return MORALE_WARNING_MESSAGE_FORMAT % post_morale
+
 func _emit_morale_band_events(pre_morale: int, post_morale: int, sim_day: int) -> void:
 	for threshold in MORALE_EVENT_THRESHOLDS:
 		if pre_morale >= threshold and post_morale < threshold:
-			var message := "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies." % post_morale
+			var message := _morale_band_message(threshold, post_morale)
 			var payload := {
 				"threshold": threshold,
 				"value": post_morale,
