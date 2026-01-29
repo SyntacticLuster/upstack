@@ -44,7 +44,7 @@ size_flags_horizontal = 3
 custom_constants/separation = 6
 
 [node name="PressureToggle" type="Button" parent="Layout/Scroll/Root/SectionPressure"]
-text = "▾ PRESSURE LEVERS"
+text = "▾ POLICIES"
 toggle_mode = true
 pressed = true
 
@@ -265,6 +265,89 @@ text = "INACTIVE"
 size_flags_horizontal = 3
 
 [node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/InformationThrottling/CardRoot"]
+text = ""
+visible = false
+
+[node name="TradePolicy" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent"]
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 220)
+
+[node name="CardRoot" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ColorBar" type="ColorRect" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
+custom_minimum_size = Vector2(0, 4)
+color = Color(0.27, 0.55, 0.85, 1.0)
+
+[node name="HeaderRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
+size_flags_horizontal = 3
+
+[node name="Title" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/HeaderRow"]
+text = "MARKET TRADE"
+size_flags_horizontal = 3
+
+[node name="StatusChip" type="PanelContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/HeaderRow"]
+size_flags_horizontal = 0
+
+[node name="StatusLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/HeaderRow/StatusChip"]
+text = "IDLE"
+
+[node name="Intent" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
+text = "Swap silver for vital stores, or sell excess stock without destabilizing operations."
+autowrap = true
+text_overrun_behavior = 3
+size_flags_horizontal = 3
+
+[node name="Inputs" type="VBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="DirectionRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="DirectionLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/DirectionRow"]
+text = "ACTION"
+size_flags_horizontal = 0
+
+[node name="Direction" type="OptionButton" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/DirectionRow"]
+size_flags_horizontal = 3
+
+[node name="ResourceRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="ResourceLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/ResourceRow"]
+text = "RESOURCE"
+size_flags_horizontal = 0
+
+[node name="Resource" type="OptionButton" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/ResourceRow"]
+size_flags_horizontal = 3
+
+[node name="AmountRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="AmountLabel" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/AmountRow"]
+text = "AMOUNT"
+size_flags_horizontal = 0
+
+[node name="Amount" type="SpinBox" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/AmountRow"]
+size_flags_horizontal = 3
+
+[node name="FooterRow" type="HBoxContainer" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
+size_flags_horizontal = 3
+custom_constants/separation = 8
+
+[node name="Apply" type="Button" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/FooterRow"]
+text = "EXECUTE"
+
+[node name="Result" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot/FooterRow"]
+text = "QUEUED"
+size_flags_horizontal = 3
+
+[node name="Warning" type="Label" parent="Layout/Scroll/Root/SectionPressure/PressureContent/TradePolicy/CardRoot"]
 text = ""
 visible = false
 

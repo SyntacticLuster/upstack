@@ -47,10 +47,7 @@ const MODULE_DELTA_KEYS: Array[String] = [
 ]
 
 const THREAT_EVENT_THRESHOLDS: Array[int] = [40, 80, 120, 160, 200]
-const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 20]
-const VOLUNTARY_COMPLIANCE_THRESHOLD: int = 20
-const VOLUNTARY_COMPLIANCE_MESSAGE_FORMAT: String = "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies."
-const MORALE_WARNING_MESSAGE_FORMAT: String = "Morale slipping (%d). Forecast: Tensions continue to rise if current policies hold."
+const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 15]
 const ATTENTION_SUMMARY_INTERVAL_HOURS := 6
 const INTRO_QUIET_DAYS := 1
 const ATTENTION_DEBT_LOW_THRESHOLD := 10.0
@@ -67,6 +64,46 @@ const RNG_OFFSET_INCIDENTS := 1
 const RNG_OFFSET_EXPEDITIONS := 2
 const RNG_OFFSET_COMMANDS := 3
 const RNG_OFFSET_STRUCTURAL := 4
+const PHASE_CIVIL_UNREST := "civil_unrest"
+const RNG_OFFSET_UNREST_PRODUCTION := 5
+const RNG_OFFSET_UNREST_INCIDENT := 6
+const RNG_OFFSET_UNREST_MODULE := 7
+const RNG_OFFSET_UNREST_TERMINAL := 8
+const RNG_OFFSET_UNREST_TERMINAL_OUTCOME := 9
+
+const PRODUCTION_HOUR_MIN := 3
+const PRODUCTION_HOUR_MAX := 7
+
+const TRADEABLE_RESOURCES := ["food", "water", "materials"]
+const TRADE_BUY_RATES := {
+	"food": 1200,
+	"water": 1000,
+	"materials": 2800,
+}
+const TRADE_SELL_RATES := {
+	"food": 900,
+	"water": 800,
+	"materials": 2200,
+}
+
+const CIVIL_UNREST_ENTER_THRESHOLD := 40
+const CIVIL_UNREST_EXIT_THRESHOLD := 45
+const CIVIL_UNREST_POP_LOSS_DEFAULT := 1
+const CIVIL_UNREST_POP_LOSS_BASE_CHANCE := 0.05
+const CIVIL_UNREST_POP_LOSS_PER_DAY := 0.02
+const CIVIL_UNREST_POP_LOSS_CAP := 0.5
+const CIVIL_UNREST_MODULE_BASE_CHANCE := 0.03
+const CIVIL_UNREST_MODULE_PER_DAY := 0.02
+const CIVIL_UNREST_MODULE_CAP := 0.4
+const CIVIL_UNREST_TERMINAL_RAMP := {
+	3: 0.05,
+	4: 0.1,
+	5: 0.2,
+	6: 0.4,
+}
+const CIVIL_UNREST_TERMINAL_CAP := 0.75
+const EXIT_MUTINY := "EXIT_MUTINY"
+const EXIT_EXILE := "EXIT_EXILE"
 
 const PHASE_LEVERS := "levers"
 const PHASE_COMMANDS := "commands"
@@ -99,6 +136,7 @@ const CMD_SET_RATIONS := "SET_RATIONS"
 const CMD_SET_MODULE_ENABLED := "SET_MODULE_ENABLED"
 const CMD_SET_MODULE_PRIORITY := "SET_MODULE_PRIORITY"
 const CMD_EXPEDITION := "EXPEDITION"
+const CMD_TRADE := "TRADE"
 
 const LEVER_RATION_HARDENING := LeverDefsRef.LEVER_RATION_HARDENING
 const LEVER_LABOR_OVERDRIVE := LeverDefsRef.LEVER_LABOR_OVERDRIVE
@@ -199,6 +237,16 @@ var _event_sequence: int = 0
 var _last_maintenance_shortfall: bool = false
 var _last_attention_summary_hour_index: int = -1
 var _last_attention_summary_value: float = 0.0
+var _hourly_food_accum: float = 0.0
+var _hourly_water_accum: float = 0.0
+var _daily_food_consumed: int = 0
+var _daily_water_consumed: int = 0
+var scheduled_production_hour: int = PRODUCTION_HOUR_MIN
+var production_executed_today: bool = false
+var _daily_rolls: Dictionary = {}
+var unrest_active: bool = false
+var unrest_hours: int = 0
+var exit_reason: String = ""
 var _lever_active_state: Dictionary = {}
 var _rng_usage_history: Array[Dictionary] = []
 var _rng_usage_lookup: Dictionary = {}
@@ -318,12 +366,16 @@ func _advance_hour() -> void:
 	hour_of_day = int(hour_index % HOURS_PER_DAY)
 	day = int(float(hour_index) / float(HOURS_PER_DAY))
 	phase = "HOUR_TICK"
+	_apply_hourly_consumption()
+	_update_civil_unrest_state()
 	_update_lever_hourly_states()
 	_emit_lever_state_changes()
-	# Per-day phases execute when we roll over to hour 0; RNG work happens inside `_step_day_core`.
 	if hour_of_day == 0:
+		_begin_day(day)
+	if hour_of_day == scheduled_production_hour and not production_executed_today:
 		var incidents := _step_day_core(day, sim_seed, tower, res, db)
 		print(_format_log_line(day, sim_seed, res, incidents, _last_obs_tokens))
+		production_executed_today = true
 	_emit_attention_debt_summary()
 	tick.emit(day)
 
@@ -439,12 +491,123 @@ func _reset_policies_and_pools() -> void:
 	conversion_scar = 0
 	conversion_burn_counts.clear()
 	pending_conversions.clear()
+	_hourly_food_accum = 0.0
+	_hourly_water_accum = 0.0
+	_daily_food_consumed = 0
+	_daily_water_consumed = 0
+	scheduled_production_hour = PRODUCTION_HOUR_MIN
+	production_executed_today = false
+	_daily_rolls.clear()
+	unrest_active = false
+	unrest_hours = 0
+	exit_reason = ""
 	_update_lever_hourly_states()
+
+func _begin_day(sim_day: int) -> void:
+	production_executed_today = false
+	_prepare_daily_rolls(sim_day)
+	_daily_food_consumed = 0
+	_daily_water_consumed = 0
+	scheduled_production_hour = int(_daily_rolls.get("production_hour", PRODUCTION_HOUR_MIN))
+	var scheduled := scheduled_production_hour
+	var message := "Daily production scheduled for hour %02d." % scheduled
+	_emit_event(
+		"PRODUCTION_SCHEDULED",
+		message,
+		"info",
+		"dev_only",
+		{"scheduled_hour": scheduled},
+		"time",
+		sim_day,
+		hour_of_day,
+		true
+	)
+	print("PRODUCTION_SCHEDULE day=%d hour=%02d" % [sim_day, scheduled])
+
+func _prepare_daily_rolls(sim_day: int) -> void:
+	_daily_rolls.clear()
+	var production_tracker := _create_rng_tracker(sim_day, PHASE_CIVIL_UNREST, "production_hour", RNG_OFFSET_UNREST_PRODUCTION)
+	var hour_range := PRODUCTION_HOUR_MAX - PRODUCTION_HOUR_MIN + 1
+	var hour_roll := int(_rng_randi(production_tracker))
+	var scheduled_hour := PRODUCTION_HOUR_MIN + int(hour_roll % hour_range)
+	_daily_rolls["production_hour"] = scheduled_hour
+	_daily_rolls["production_roll"] = hour_roll
+	var incident_tracker := _create_rng_tracker(sim_day, PHASE_CIVIL_UNREST, "unrest_incident", RNG_OFFSET_UNREST_INCIDENT)
+	_daily_rolls["unrest_incident_roll"] = _rng_randf(incident_tracker)
+	var module_tracker := _create_rng_tracker(sim_day, PHASE_CIVIL_UNREST, "unrest_module", RNG_OFFSET_UNREST_MODULE)
+	_daily_rolls["unrest_module_roll"] = _rng_randf(module_tracker)
+	var terminal_tracker := _create_rng_tracker(sim_day, PHASE_CIVIL_UNREST, "unrest_terminal", RNG_OFFSET_UNREST_TERMINAL)
+	_daily_rolls["unrest_terminal_roll"] = _rng_randf(terminal_tracker)
+	var outcome_tracker := _create_rng_tracker(sim_day, PHASE_CIVIL_UNREST, "unrest_terminal_outcome", RNG_OFFSET_UNREST_TERMINAL_OUTCOME)
+	_daily_rolls["unrest_terminal_outcome_roll"] = _rng_randf(outcome_tracker)
+
+func _apply_hourly_consumption() -> void:
+	if res == null:
+		return
+	var population := max(res.population, 0)
+	if population == 0:
+		return
+	var food_rate := float(population) * food_ration * ration_consumption_multiplier_today / float(HOURS_PER_DAY)
+	var water_rate := float(population) * water_ration * ration_consumption_multiplier_today / float(HOURS_PER_DAY)
+	_hourly_food_accum = snappedf(_hourly_food_accum + food_rate, SIM_FLOAT_SNAP)
+	_hourly_water_accum = snappedf(_hourly_water_accum + water_rate, SIM_FLOAT_SNAP)
+	var food_to_consume := int(floor(_hourly_food_accum))
+	var water_to_consume := int(floor(_hourly_water_accum))
+	if food_to_consume > 0:
+		var actual_food := min(res.food, food_to_consume)
+		res.food = res.food - actual_food
+		_daily_food_consumed += actual_food
+		_hourly_food_accum -= float(actual_food)
+	if water_to_consume > 0:
+		var actual_water := min(res.water, water_to_consume)
+		res.water = res.water - actual_water
+		_daily_water_consumed += actual_water
+		_hourly_water_accum -= float(actual_water)
+
+func _update_civil_unrest_state() -> void:
+	if res == null:
+		return
+	var morale := res.morale
+	if unrest_active:
+		if morale >= CIVIL_UNREST_EXIT_THRESHOLD:
+			unrest_active = false
+			unrest_hours = 0
+		else:
+			unrest_hours += 1
+	else:
+		if morale < CIVIL_UNREST_ENTER_THRESHOLD:
+			unrest_active = true
+			unrest_hours = 1
+		else:
+			unrest_hours = 0
 
 func enqueue_command(cmd: SimCommand) -> void:
 	if cmd == null:
 		return
 	_command_queue.append(cmd)
+
+func queue_trade(resource: String, direction: String, amount: int) -> Dictionary:
+	var normalized_resource := str(resource).to_lower()
+	var normalized_direction := str(direction).to_lower()
+	var payload := {
+		"direction": normalized_direction,
+		"resource": normalized_resource,
+		"amount": clamp(amount, 0, 999999),
+	}
+	var result := {"ok": false, "message": "INVALID TRADE"}
+	if normalized_direction != "buy" and normalized_direction != "sell":
+		result["message"] = "INVALID ACTION"
+		return result
+	if not TRADEABLE_RESOURCES.has(normalized_resource):
+		result["message"] = "INVALID RESOURCE"
+		return result
+	if amount <= 0:
+		result["message"] = "INVALID AMOUNT"
+		return result
+	enqueue_command(SimCommand.new(CMD_TRADE, payload))
+	result["ok"] = true
+	result["message"] = "TRADE QUEUED"
+	return result
 
 func clear_commands() -> void:
 	_command_queue.clear()
@@ -873,15 +1036,10 @@ func _emit_threat_band_events(pre_threat: int, post_threat: int, sim_day: int) -
 				true
 			)
 
-func _morale_band_message(threshold: int, post_morale: int) -> String:
-	if threshold == VOLUNTARY_COMPLIANCE_THRESHOLD:
-		return VOLUNTARY_COMPLIANCE_MESSAGE_FORMAT % post_morale
-	return MORALE_WARNING_MESSAGE_FORMAT % post_morale
-
 func _emit_morale_band_events(pre_morale: int, post_morale: int, sim_day: int) -> void:
 	for threshold in MORALE_EVENT_THRESHOLDS:
 		if pre_morale >= threshold and post_morale < threshold:
-			var message := _morale_band_message(threshold, post_morale)
+			var message := "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies." % post_morale
 			var payload := {
 				"threshold": threshold,
 				"value": post_morale,
@@ -954,8 +1112,8 @@ func _emit_attention_debt_summary() -> void:
 		return
 	if day <= INTRO_QUIET_DAYS:
 		return
-	var snapped_total: float = snappedf(total, SIM_FLOAT_SNAP)
-	var snapped_delta: float = snappedf(delta, SIM_FLOAT_SNAP)
+	var snapped_total: float = snapped(total, SIM_FLOAT_SNAP)
+	var snapped_delta: float = snapped(delta, SIM_FLOAT_SNAP)
 	var message: String = ATTENTION_NEUTRAL_MESSAGE
 	var severity: String = "info"
 	if visibility_triggered:
@@ -1390,7 +1548,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		ration_consumption_multiplier_today = multiplier
 		var scar_gain := RATION_SCAR_PER_DAY_HARD if hard else RATION_SCAR_PER_DAY_SOFT
 		ration_scar += scar_gain
-		ration_scar = snappedf(ration_scar, SIM_FLOAT_SNAP)
+		ration_scar = snapped(ration_scar, SIM_FLOAT_SNAP)
 		_obs_push(obs, "LEVER_RATION@%s" % ration_hardening_mode)
 		_log_lever_event(
 			sim_day,
@@ -1424,7 +1582,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		var intensity := labor_overdrive_intensity
 		labor_output_multiplier_today = 1.0 + (float(intensity) * LABOR_OVERDRIVE_MULT_PER_LEVEL)
 		labor_scar += float(intensity) * LABOR_SCAR_PER_DAY
-		labor_scar = snappedf(labor_scar, SIM_FLOAT_SNAP)
+		labor_scar = snapped(labor_scar, SIM_FLOAT_SNAP)
 		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_LABOR@%d" % intensity)
 		_log_lever_event(
@@ -1460,7 +1618,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		expedition_yield_bonus_per_crew_today = intensity * EXPEDITION_COMPRESSION_YIELD_PER_CREW
 		expedition_attention_bonus_per_trip_today = intensity * EXPEDITION_ATTENTION_PER_TRIP
 		expedition_attention += float(intensity * EXPEDITION_ATTENTION_PER_DAY)
-		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_EXPEDITION@%d" % intensity)
 		_log_lever_event(
@@ -1609,6 +1767,8 @@ func _phase_commands(_sim_day: int, _run_seed: int, sim_tower: Tower, sim_res: R
 				_cmd_set_module_priority(cmd.payload, sim_tower, obs)
 			CMD_EXPEDITION:
 				_cmd_expedition(cmd.payload, _sim_day, _run_seed, sim_res, obs)
+			CMD_TRADE:
+				_cmd_trade(cmd.payload, sim_res, obs, _sim_day)
 			_:
 				_obs_push(obs, "CMD:UNKNOWN")
 
@@ -1793,7 +1953,7 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 
 	if expedition_attention_bonus_per_trip_today > 0:
 		expedition_attention += float(expedition_attention_bonus_per_trip_today)
-		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 		_obs_push(obs, "ATTN+%d" % expedition_attention_bonus_per_trip_today)
 
 	if not scav_pools.has(target):
@@ -1827,6 +1987,84 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		_:
 			# Unknown targets drain their pool but don't create new subsystems.
 			_obs_push(obs, "YIELD_UNKNOWN@%d" % yield_amount)
+
+func _log_trade_event(sim_day: int, message: String, severity: String, payload: Dictionary) -> void:
+	_emit_event(
+		"TRADE",
+		message,
+		severity,
+		"player_feed",
+		payload,
+		"trade",
+		sim_day,
+		hour_of_day,
+		true
+	)
+
+func _cmd_trade(payload: Dictionary, sim_res: Resources, obs: Array[String], sim_day: int) -> void:
+	if payload == null:
+		return
+	var direction := str(payload.get("direction", "")).to_lower()
+	var resource := str(payload.get("resource", "")).to_lower()
+	var amount := int(payload.get("amount", 0))
+	var base_payload := {
+		"direction": direction,
+		"resource": resource,
+		"amount": amount,
+		"silver_balance": sim_res.silver,
+	}
+	if direction != "buy" and direction != "sell":
+		_log_trade_event(sim_day, "Trade rejected: invalid action.", "warn", base_payload)
+		_obs_push(obs, "TRADE_REJECTED_ACTION")
+		return
+	if not TRADEABLE_RESOURCES.has(resource):
+		_log_trade_event(sim_day, "Trade rejected: unsupported resource.", "warn", base_payload)
+		_obs_push(obs, "TRADE_REJECTED_RESOURCE")
+		return
+	if amount <= 0:
+		_log_trade_event(sim_day, "Trade rejected: invalid amount.", "warn", base_payload)
+		_obs_push(obs, "TRADE_REJECTED_AMOUNT")
+		return
+	if direction == "buy":
+		var rate := int(TRADE_BUY_RATES.get(resource, 0))
+		if rate <= 0:
+			_log_trade_event(sim_day, "Trade rejected: buy rate unavailable.", "warn", base_payload)
+			return
+		var cost := amount * rate
+		if sim_res.silver < cost:
+			_log_trade_event(sim_day, "Trade rejected: insufficient silver.", "warn", base_payload)
+			_obs_push(obs, "TRADE_NO_SILVER")
+			return
+		var before_amount := sim_res.get_amount(resource)
+		sim_res.silver -= cost
+		sim_res.set_amount(resource, before_amount + amount)
+		var event_payload := base_payload.duplicate()
+		event_payload["silver_change"] = -cost
+		event_payload["resource_before"] = before_amount
+		event_payload["resource_after"] = sim_res.get_amount(resource)
+		var message := "Bought %d %s for %s." % [amount, resource, Resources.format_currency(cost)]
+		_log_trade_event(sim_day, message, "info", event_payload)
+		_obs_push(obs, "TRADE_BUY@%s" % resource)
+	else:
+		var rate := int(TRADE_SELL_RATES.get(resource, 0))
+		if rate <= 0:
+			_log_trade_event(sim_day, "Trade rejected: sell rate unavailable.", "warn", base_payload)
+			return
+		var available := sim_res.get_amount(resource)
+		if available < amount:
+			_log_trade_event(sim_day, "Trade rejected: insufficient resources.", "warn", base_payload)
+			_obs_push(obs, "TRADE_NO_RESOURCE")
+			return
+		var revenue := amount * rate
+		sim_res.set_amount(resource, available - amount)
+		sim_res.silver += revenue
+		var event_payload := base_payload.duplicate()
+		event_payload["silver_change"] = revenue
+		event_payload["resource_before"] = available
+		event_payload["resource_after"] = sim_res.get_amount(resource)
+		var message := "Sold %d %s for %s." % [amount, resource, Resources.format_currency(revenue)]
+		_log_trade_event(sim_day, message, "info", event_payload)
+		_obs_push(obs, "TRADE_SELL@%s" % resource)
 
 func _phase_delayed_consequences(sim_day: int, sim_res: Resources, obs: Array[String]) -> void:
 	if _delayed_consequence_queue.is_empty():
@@ -1988,7 +2226,7 @@ func _process_structural_collapse_entry(sim_res: Resources, obs: Array[String], 
 		sim_res.morale -= STRUCTURAL_COLLAPSE_MORALE_PENALTY
 		sim_res.materials = max(sim_res.materials - STRUCTURAL_COLLAPSE_MATERIALS_LOSS, 0)
 		sim_res.collapse_debt += STRUCTURAL_COLLAPSE_DEBT_PENALTY
-		sim_res.collapse_debt = snappedf(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+		sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
 		_obs_push(obs, "STRUCT_COLLAPSE@%0.2f" % sim_res.collapse_debt)
 		_structural_warning_logged = false
 
@@ -2005,7 +2243,7 @@ func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 		staying_step += 0.5
 
 	sim_res.staying_index += staying_step
-	sim_res.staying_index = snappedf(sim_res.staying_index, SIM_FLOAT_SNAP)
+	sim_res.staying_index = snapped(sim_res.staying_index, SIM_FLOAT_SNAP)
 
 	var ceiling_decay: float = 0.05 + (staying_step * 0.02) + (sim_res.staying_index * 0.001)
 	if sim_res.days_without_food >= 3:
@@ -2023,10 +2261,8 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 	# Phase B: production & consumption. Modules require both power and inputs;
 	# per spec we avoid partial operation so nothing runs unless both are satisfied.
 	var food_before := sim_res.food
-	var food_consumption := int(ceil(float(sim_res.population) * food_ration * ration_consumption_multiplier_today))
-	var water_consumption := int(ceil(float(sim_res.population) * water_ration * ration_consumption_multiplier_today))
-	sim_res.add_delta("food", -food_consumption)
-	sim_res.add_delta("water", -water_consumption)
+	var food_consumption := _daily_food_consumed
+	var water_consumption := _daily_water_consumed
 
 	var instances: Array[ModuleInstance] = []
 	var order_index: int = 0
@@ -2142,20 +2378,22 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 	_refresh_module_snapshots(module_power_map)
 
 	var after_food := sim_res.food
-	var expected_food: int = max(food_before - food_consumption + applied_food_from_modules, 0)
+	var expected_food: int = food_before + applied_food_from_modules
 	var discrepancy: int = after_food - expected_food
 	_last_production_metrics = {
 		"food_before": food_before,
 		"food_consumption": food_consumption,
+		"water_consumption": water_consumption,
 		"applied_food": applied_food_from_modules,
 		"after_food": after_food,
 		"expected_food": expected_food,
 		"discrepancy": discrepancy,
 	}
-	if enable_food_debug_log and (food_consumption > 0 or applied_food_from_modules != 0 or discrepancy != 0):
+	if enable_food_debug_log and (food_consumption > 0 or applied_food_from_modules != 0 or discrepancy != 0 or water_consumption > 0):
 		var status := "ok" if discrepancy == 0 else "discrep=%d" % discrepancy
-		print("FOOD_SUMMARY consumed=%d produced=%d before=%d after=%d expected=%d [%s]" % [
+		print("FOOD_SUMMARY consumed=%d water=%d produced=%d before=%d after=%d expected=%d [%s]" % [
 			food_consumption,
+			water_consumption,
 			applied_food_from_modules,
 			food_before,
 			after_food,
@@ -2216,7 +2454,7 @@ func _apply_throttled_morale_penalty(sim_res: Resources, amount: int, obs: Array
 		sim_res.morale -= reduced
 	if deferred > 0:
 		info_throttle_backlog += float(deferred)
-		info_throttle_backlog = snappedf(info_throttle_backlog, SIM_FLOAT_SNAP)
+		info_throttle_backlog = snapped(info_throttle_backlog, SIM_FLOAT_SNAP)
 		if tag != "":
 			_obs_push(obs, "THROTTLED@%s@%d" % [tag, deferred])
 
@@ -2265,7 +2503,7 @@ func _phase_pressure_accrual(
 	var attention_delta: float = _signature_attention_delta(total_noise, total_heat, sim_res.attention_multiplier)
 	if attention_delta > 0.0:
 		expedition_attention += attention_delta
-		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 
 	# If morale is collapsing, people make mistakes -> more threat
 	var morale_for_threat: int = sim_res.morale + maintenance_morale_penalty
@@ -2290,13 +2528,13 @@ func _phase_structural_risk(
 
 	sim_res.strain += strain_gain
 	sim_res.strain = max(sim_res.strain - STRUCTURAL_STRAIN_DECAY, 0.0)
-	sim_res.strain = snappedf(sim_res.strain, SIM_FLOAT_SNAP)
+	sim_res.strain = snapped(sim_res.strain, SIM_FLOAT_SNAP)
 
 	if maintenance_deficit > 0:
 		sim_res.collapse_debt += float(maintenance_deficit) * STRUCTURAL_COLLAPSE_DEBT_SCALE
 	elif sim_res.collapse_debt > 0.0:
 		sim_res.collapse_debt = max(sim_res.collapse_debt - STRUCTURAL_COLLAPSE_DECAY, 0.0)
-	sim_res.collapse_debt = snappedf(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+	sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
 
 	var prev_level := _structural_telegraph_level
 	var new_level := _structural_level_for_strain(sim_res.strain)
@@ -2331,7 +2569,7 @@ func _signature_attention_delta(noise: int, heat: int, multiplier: float) -> flo
 	var base: float = float(noise + heat) * 0.05
 	var clamped_multiplier: float = max(multiplier, 0.0)
 	var amount: float = base * clamped_multiplier
-	return snappedf(amount, SIM_FLOAT_SNAP)
+	return snapped(amount, SIM_FLOAT_SNAP)
 
 func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String]) -> Dictionary:
 	# Phase E: resolution (counters, population loss, clamp)
@@ -2369,8 +2607,167 @@ func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String
 		"pop_loss": pop_loss,
 	}
 
+func _run_civil_unrest_daily(sim_day: int, sim_tower: Tower, sim_db: ModuleDB, obs: Array[String]) -> void:
+	if not unrest_active:
+		return
+	var unrest_days := int(floor(float(unrest_hours) / float(HOURS_PER_DAY)))
+	var module_target: Dictionary = {}
+	var incident_roll := float(_daily_rolls.get("unrest_incident_roll", 1.0))
+	var pop_chance := clamp(
+		CIVIL_UNREST_POP_LOSS_BASE_CHANCE + float(unrest_days) * CIVIL_UNREST_POP_LOSS_PER_DAY,
+		0.0,
+		CIVIL_UNREST_POP_LOSS_CAP,
+	)
+	var module_chance := clamp(
+		CIVIL_UNREST_MODULE_BASE_CHANCE + float(unrest_days) * CIVIL_UNREST_MODULE_PER_DAY,
+		0.0,
+		CIVIL_UNREST_MODULE_CAP,
+	)
+	var total_threshold := min(1.0, pop_chance + module_chance)
+	var incident_type := ""
+	if incident_roll <= pop_chance:
+		_apply_unrest_pop_loss(obs)
+		incident_type = "POP_LOSS"
+	elif incident_roll <= total_threshold:
+		module_target = _apply_unrest_module_sabotage(sim_tower, sim_db, obs)
+		incident_type = "MODULE_SABOTAGE"
+	if incident_type != "":
+		var payload := {
+			"unrest_days": unrest_days,
+			"roll": incident_roll,
+			"pop_threshold": pop_chance,
+			"module_threshold": module_chance,
+			"incident_type": incident_type,
+		}
+		if incident_type == "MODULE_SABOTAGE" and module_target != null and module_target.size() > 0:
+			payload["module_id"] = module_target.get("id", "")
+			payload["module_name"] = module_target.get("name", "")
+			payload["module_location"] = module_target.get("location", "")
+		_emit_event(
+			"CIVIL_UNREST_%s" % incident_type,
+			"Civil unrest roll=%.3f thresholds=pop:%.2f module:%.2f" % [
+				incident_roll,
+				pop_chance,
+				module_chance,
+			],
+			"warn",
+			"sticky",
+			payload,
+			"unrest",
+			sim_day,
+			hour_of_day,
+			true
+		)
+
+func _run_civil_unrest_terminal(sim_day: int, sim_res: Resources, obs: Array[String]) -> void:
+	if not unrest_active:
+		return
+	var unrest_days := int(floor(float(unrest_hours) / float(HOURS_PER_DAY)))
+	if unrest_days < 3:
+		return
+	var chance := _civil_unrest_terminal_chance(unrest_days)
+	var terminal_roll := float(_daily_rolls.get("unrest_terminal_roll", 1.0))
+	if terminal_roll > chance:
+		return
+	var outcome_roll := float(_daily_rolls.get("unrest_terminal_outcome_roll", 0.0))
+	var outcome := EXIT_MUTINY if outcome_roll < 0.5 else EXIT_EXILE
+	exit_reason = outcome
+	sim_res.population = 0
+	var payload := {
+		"unrest_days": unrest_days,
+		"roll": terminal_roll,
+		"threshold": chance,
+		"outcome_roll": outcome_roll,
+	}
+	var label := outcome.split("_")[-1].capitalize()
+	_emit_event(
+		outcome,
+		"%s triggered after %d unrest days." % [label, unrest_days],
+		"warn",
+		"modal",
+		payload,
+		"unrest",
+		sim_day,
+		hour_of_day,
+		true
+	)
+	_obs_push(obs, outcome)
+
+func _apply_unrest_pop_loss(obs: Array[String]) -> void:
+	if res == null:
+		return
+	if CIVIL_UNREST_POP_LOSS_DEFAULT <= 0:
+		return
+	var before_pop := res.population
+	res.population = max(res.population - CIVIL_UNREST_POP_LOSS_DEFAULT, 0)
+	if res.population < before_pop:
+		_obs_push(obs, "UNREST_POP_LOSS@%d" % CIVIL_UNREST_POP_LOSS_DEFAULT)
+
+func _apply_unrest_module_sabotage(sim_tower: Tower, sim_db: ModuleDB, obs: Array[String]) -> Dictionary:
+	if sim_tower == null or sim_db == null:
+		return {}
+	var candidates := _civil_unrest_module_candidates(sim_tower, sim_db)
+	if candidates.is_empty():
+		return {}
+	var module_roll := float(_daily_rolls.get("unrest_module_roll", 0.0))
+	var normalized := clamp(module_roll, 0.0, 0.999999)
+	var idx := int(floor(normalized * float(candidates.size())))
+	idx = clamp(idx, 0, candidates.size() - 1)
+	var target := candidates[idx]
+	res.threat += 1
+	res.morale = max(res.morale - 1, 0)
+	var module_id := str(target.get("id", "unknown"))
+	_obs_push(obs, "MODULE_SABOTAGE@%s" % module_id)
+	if target.has("location"):
+		_obs_push(obs, "SABOTAGED_MODULE@%s" % target.get("location"))
+	return target
+
+func _civil_unrest_module_candidates(sim_tower: Tower, sim_db: ModuleDB) -> Array[Dictionary]:
+	var candidates: Array[Dictionary] = []
+	for f in range(sim_tower.floors.size()):
+		var floor_data: Variant = sim_tower.floors[f]
+		if floor_data == null or not (floor_data is Array):
+			continue
+		var grid: Array = floor_data as Array
+		for y in range(sim_tower.height):
+			if y < 0 or y >= grid.size():
+				continue
+			var row_candidate: Variant = grid[y]
+			if row_candidate == null or not (row_candidate is Array):
+				continue
+			var row: Array = row_candidate as Array
+			for x in range(sim_tower.width):
+				if x < 0 or x >= row.size():
+					continue
+				var module_id := row[x]
+				if module_id == null:
+					continue
+				if _is_module_abandoned(f, x, y):
+					continue
+				if str(module_id) == "core":
+					continue
+				var module_def := sim_db.get_def(str(module_id))
+				var module_name := str(module_def.name) if module_def != null else str(module_id)
+				candidates.append({
+					"id": str(module_id),
+					"name": module_name,
+					"location": "%d:%d:%d" % [f, x, y],
+				})
+	return candidates
+
+func _civil_unrest_terminal_chance(unrest_days: int) -> float:
+	if unrest_days <= 0:
+		return 0.0
+	if CIVIL_UNREST_TERMINAL_RAMP.has(unrest_days):
+		return CIVIL_UNREST_TERMINAL_RAMP.get(unrest_days, 0.0)
+	if unrest_days >= 7:
+		return CIVIL_UNREST_TERMINAL_CAP
+	return 0.0
+
 func _phase_exit_checks(sim_res: Resources, obs: Array[String]) -> String:
 	# Phase F: exit checks (stub evaluator only)
+	if exit_reason != "":
+		return exit_reason
 	if sim_res.population <= 0:
 		_obs_push(obs, "EXIT_COLLAPSE_CANDIDATE")
 		return "collapse_candidate"
@@ -2416,6 +2813,8 @@ func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Reso
 
 	# Phase E: resolution
 	_phase_resolution(sim_res, growth, obs)
+	_run_civil_unrest_daily(sim_day, sim_tower, sim_db, obs)
+	_run_civil_unrest_terminal(sim_day, sim_res, obs)
 
 	var post_threat: int = sim_res.threat
 	var post_morale: int = sim_res.morale
@@ -2478,14 +2877,14 @@ func _state_signature() -> String:
 	parts.append("day=%d" % day)
 	parts.append("hour_idx=%d" % hour_index)
 	parts.append("res=%s" % res.snapshot())
-	parts.append("staying=%.2f" % snappedf(res.staying_index, SIM_FLOAT_SNAP))
+	parts.append("staying=%.2f" % snapped(res.staying_index, SIM_FLOAT_SNAP))
 	parts.append("morale_ceiling=%.2f" % res.morale_ceiling)
 	parts.append("attention_mult=%.2f" % res.attention_multiplier)
-	parts.append("expedition_attention=%.2f" % snappedf(expedition_attention, SIM_FLOAT_SNAP))
-	parts.append("strain=%.2f" % snappedf(res.strain, SIM_FLOAT_SNAP))
-	parts.append("collapse_debt=%.2f" % snappedf(res.collapse_debt, SIM_FLOAT_SNAP))
-	parts.append("ration_scar=%.2f" % snappedf(ration_scar, SIM_FLOAT_SNAP))
-	parts.append("labor_scar=%.2f" % snappedf(labor_scar, SIM_FLOAT_SNAP))
+	parts.append("expedition_attention=%.2f" % snapped(expedition_attention, SIM_FLOAT_SNAP))
+	parts.append("strain=%.2f" % snapped(res.strain, SIM_FLOAT_SNAP))
+	parts.append("collapse_debt=%.2f" % snapped(res.collapse_debt, SIM_FLOAT_SNAP))
+	parts.append("ration_scar=%.2f" % snapped(ration_scar, SIM_FLOAT_SNAP))
+	parts.append("labor_scar=%.2f" % snapped(labor_scar, SIM_FLOAT_SNAP))
 	parts.append("conversion_scar=%d" % conversion_scar)
 	var abandoned_keys := abandoned_modules.keys()
 	abandoned_keys.sort()
@@ -2509,7 +2908,12 @@ func _simulate_state_signatures(days_to_run: int, run_seed: int, commands_by_day
 		var scheduled: Array = commands_by_day.get(sim.day, [])
 		for cmd in _clone_command_array(scheduled):
 			sim.enqueue_command(cmd)
+		sim.hour_of_day = 0
+		sim._begin_day(sim.day)
+		sim.hour_index = sim.day * HOURS_PER_DAY + sim.scheduled_production_hour
+		sim.hour_of_day = sim.scheduled_production_hour
 		sim._step_day_core(sim.day, run_seed, sim.tower, sim.res, sim.db)
+		sim.production_executed_today = true
 		signatures.append(sim._state_signature())
 	return {
 		"hashes": signatures,
@@ -2560,7 +2964,12 @@ func _run_scripted_once(days_to_run: int, run_seed: int, commands_by_day: Dictio
 		var scheduled: Array = commands_by_day.get(sim.day, [])
 		for cmd in _clone_command_array(scheduled):
 			sim.enqueue_command(cmd)
+		sim.hour_of_day = 0
+		sim._begin_day(sim.day)
+		sim.hour_index = sim.day * HOURS_PER_DAY + sim.scheduled_production_hour
+		sim.hour_of_day = sim.scheduled_production_hour
 		var incidents := sim._step_day_core(sim.day, run_seed, sim.tower, sim.res, sim.db)
+		sim.production_executed_today = true
 		lines.append(sim._format_log_line(sim.day, run_seed, sim.res, incidents, sim._last_obs_tokens))
 
 	return lines

@@ -4,6 +4,8 @@ const STAT_DEFINITIONS: Array[Dictionary] = [
 	{"label": "Food", "path": ["res", "food"], "group": "resource"},
 	{"label": "Water", "path": ["res", "water"], "group": "resource"},
 	{"label": "Materials", "path": ["res", "materials"], "group": "resource"},
+	{"label": "Silver", "path": ["res", "silver"], "group": "currency"},
+	{"label": "Gold", "path": ["res", "gold"], "group": "currency"},
 	{"label": "Morale", "path": ["res", "morale"], "group": "status"},
 	{"label": "Threat", "path": ["res", "threat"], "group": "status"},
 	{"label": "Population", "path": ["res", "population"], "group": "status"},
@@ -13,6 +15,8 @@ const COLLAPSED_ICON_MAP := {
 	"Food": "F",
 	"Water": "W",
 	"Materials": "M",
+	"Silver": "SI",
+	"Gold": "G",
 	"Morale": "MO",
 	"Threat": "TH",
 	"Population": "POP",
@@ -298,7 +302,8 @@ func _update_stats() -> void:
 		if value_label == null:
 			continue
 		var value: Variant = _read_path(mapping.get("path", []))
-		var display_value: String = str(value) if value != null else "N/A"
+		var group := str(mapping.get("group", "resource"))
+		var display_value: String = _display_for_value(group, value)
 		var change_state := _determine_change_state(entry, value)
 		if indicator_label != null:
 			_apply_indicator_state(indicator_label, change_state)
@@ -484,6 +489,27 @@ func _to_numeric(value: Variant) -> float:
 	if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT:
 		return float(value)
 	return NAN
+
+func _display_for_value(group: String, value: Variant) -> String:
+	if value == null:
+		return "N/A"
+	if group == "currency":
+		return _format_currency_value(value)
+	return str(value)
+
+func _format_currency_value(value: Variant) -> String:
+	var amount := 0
+	match typeof(value):
+		TYPE_INT:
+			amount = int(value)
+		TYPE_FLOAT:
+			amount = int(round(value))
+		_:
+			return "0.000"
+	return _currency_display(amount)
+
+func _currency_display(amount: int) -> String:
+	return Resources.format_currency(amount)
 
 func _on_pause_button_pressed() -> void:
 	if _game == null:

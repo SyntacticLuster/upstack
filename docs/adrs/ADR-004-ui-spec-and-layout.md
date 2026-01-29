@@ -24,7 +24,7 @@ This document specifies the complete user interface design for UPSTACK's in-game
 │   ┌───────────────────────────┐   │     │     OPERATIONS CONSOLE        │   │
 │   │ Food       ▼  47          │   │     │     (Scrollable)              │   │
 │   │ Water      •  62          │   │     │                               │   │
-│   │ Materials  ▲  198         │   │     │ ▾ Pressure Levers             │   │
+│   │ Materials  ▲  198         │   │     │ ▾ Policies                    │   │
 │   └───────────────────────────┘   │     │   [Ration Hardening]          │   │
 │                                   │     │   [Labor Overdrive]           │   │
 │   ┌───────────────────────────┐   │     │   [Information Throttling]    │   │
