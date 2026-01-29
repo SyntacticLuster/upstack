@@ -1,11 +1,11 @@
 extends Node
 class_name Game
 
-const SPEED_MULTIPLIERS := [0.5, 1.0, 2.0, 4.0]
-const SPEED_LABELS := ["0.5x", "1x", "2x", "4x"]
+const SPEED_MULTIPLIERS := [0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+const SPEED_LABELS := ["0.5x", "1x", "2x", "4x", "8x", "16x"]
 const BASE_SECONDS_PER_HOUR := 10.0
 
-@export_range(1, 5) var max_ticks_per_frame: int = 3
+@export_range(1, 8) var max_ticks_per_frame: int = 3
 
 @onready var sim: Sim = $Sim
 

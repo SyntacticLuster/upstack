@@ -63,6 +63,10 @@ toggle_mode = true
 text = "DEBUG"
 toggle_mode = true
 
+[node name="ModulesFilter" type="Button" parent="Root/Filters"]
+text = "MODULES"
+toggle_mode = true
+
 [node name="Status" type="Label" parent="Root"]
 text = "STATUS: DISCONNECTED"
 
@@ -78,3 +82,61 @@ size_flags_vertical = 3
 size_flags_horizontal = 3
 size_flags_vertical = 3
 custom_constants/separation = 4
+
+[node name="ModulesContainer" type="PanelContainer" parent="Root"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+visible = false
+custom_constants/separation = 6
+
+[node name="ModulesSplit" type="HSplitContainer" parent="Root/ModulesContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 6
+
+[node name="ModulesRosterPanel" type="PanelContainer" parent="Root/ModulesContainer/ModulesSplit"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ModulesRoster" type="ItemList" parent="Root/ModulesContainer/ModulesSplit/ModulesRosterPanel"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+select_mode = 1
+
+[node name="ModuleInspectorPanel" type="PanelContainer" parent="Root/ModulesContainer/ModulesSplit"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 4
+
+[node name="InspectorContent" type="VBoxContainer" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 4
+
+[node name="InspectorTitle" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "INSPECTOR"
+
+[node name="ModuleIdLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "ID: -"
+
+[node name="ModuleTypeLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "Type: -"
+
+[node name="ModuleLocationLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "Location: -"
+
+[node name="ModulePoweredLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "Powered: -"
+
+[node name="ModuleOnlineLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+text = "Online: -"
+
+[node name="DeltasSection" type="VBoxContainer" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent"]
+custom_constants/separation = 2
+visible = false
+
+[node name="DeltasTitle" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/DeltasSection"]
+text = "Deltas"
+
+[node name="DeltasLabel" type="Label" parent="Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/DeltasSection"]
+text = "-"

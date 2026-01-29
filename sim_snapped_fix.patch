@@ -1,0 +1,9 @@
+diff --git a/scripts/sim/Sim.gd b/scripts/sim/Sim.gd
+@@
+-const SIM_FLOAT_SNAP := 0.01 # Determinism hardening: snap small float accumulators post-update.
++const SIM_FLOAT_SNAP: float = 0.01 # Determinism hardening: snap small float accumulators post-update.
+@@
+-	var snapped_total := snapped(total, SIM_FLOAT_SNAP)
+-	var snapped_delta := snapped(delta, SIM_FLOAT_SNAP)
++	var snapped_total: float = snapped(total, SIM_FLOAT_SNAP)
++	var snapped_delta: float = snapped(delta, SIM_FLOAT_SNAP)

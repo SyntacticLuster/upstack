@@ -72,12 +72,14 @@ This document specifies the complete user interface design for UPSTACK's in-game
 
 | Resolution | Left Rail | Operations | Ledger | Notes |
 |------------|-----------|------------|--------|-------|
+
 | **800×600** | Collapsed by default (icon strip) | Full width, 55% height | 45% height | HUD time controls stack vertically |
 | **1152×648** | 180px fixed | Remaining width | 35% height | Baseline minimum comfortable size |
 | **1600×900** | 220px fixed | Remaining width | 35% height | Standard desktop |
 | **1920×1080** | 260px fixed | Remaining width, max 900px | 35% height | Content max-width prevents over-stretch |
 
 **Breakpoint behaviors**:
+
 - Below 800px width: Force single-column mode—Operations and Ledger become tabs, not split
 - At 1152×648+: Three-column layout (Rail | Operations | Right margin if space)
 - Operations Console sections use `fill_expand` but lever cards have `min_size.y = 140px`

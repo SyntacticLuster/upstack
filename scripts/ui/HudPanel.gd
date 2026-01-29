@@ -27,7 +27,11 @@ const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 @onready var day_label: Label = $Root/TopBarPanel/TopBar/DayGroup/DayValue
 @onready var phase_label: Label = $Root/TopBarPanel/TopBar/DayGroup/PhaseValue
 @onready var time_label: Label = $Root/TopBarPanel/TopBar/DayGroup/TimeValue
+@onready var alerts_group: Control = $Root/TopBarPanel/TopBar/AlertsGroup
 @onready var alerts_value: Label = $Root/TopBarPanel/TopBar/AlertsGroup/AlertsValue
+@onready var alerts_drawer: PanelContainer = $Root/AlertsDrawer
+@onready var alerts_items: VBoxContainer = $Root/AlertsDrawer/AlertsRoot/AlertsScroll/AlertsItems
+@onready var alerts_close: Button = $Root/AlertsDrawer/AlertsRoot/AlertsHeader/AlertsClose
 @onready var pause_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/PauseButton
 @onready var half_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/HalfButton
 @onready var one_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/OneButton
@@ -54,6 +58,7 @@ var _pacing_state_callback: Callable = Callable(self, "_on_game_pacing_state_cha
 var _left_rail_collapsed: bool = false
 var _left_rail_user_collapsed: bool = false
 var _left_rail_width: float = 180.0
+var _alert_acknowledged: Dictionary = {}
 
 func _ready() -> void:
 	_build_stat_entries()
@@ -62,6 +67,14 @@ func _ready() -> void:
 	_refresh_pacing_controls()
 	collapse_button.pressed.connect(_on_collapse_left_rail)
 	expand_button.pressed.connect(_on_expand_left_rail)
+	var alerts_group_cb: Callable = Callable(self, "_on_alerts_group_input")
+	if alerts_group != null and not alerts_group.gui_input.is_connected(alerts_group_cb):
+		alerts_group.mouse_filter = Control.MOUSE_FILTER_STOP
+		alerts_group.gui_input.connect(alerts_group_cb)
+	var alerts_close_cb: Callable = Callable(self, "_on_alerts_close_pressed")
+	if alerts_close != null and not alerts_close.pressed.is_connected(alerts_close_cb):
+		alerts_close.pressed.connect(alerts_close_cb)
+	_set_alerts_drawer_visible(false)
 	_apply_left_rail_state(_left_rail_collapsed)
 
 func set_sim(sim_ref: Object) -> void:
@@ -88,6 +101,7 @@ func refresh() -> void:
 		return
 	_day_phase_time()
 	_update_stats()
+	_refresh_alerts()
 
 func set_time_controls_vertical(use_column: bool) -> void:
 	if use_column:
@@ -157,12 +171,12 @@ func _on_expand_left_rail() -> void:
 
 func _connect_pacing_buttons() -> void:
 	pause_button.pressed.connect(_on_pause_button_pressed)
-	half_button.pressed.connect(_on_half_button_pressed)
-	one_button.pressed.connect(_on_one_button_pressed)
-	two_button.pressed.connect(_on_two_button_pressed)
-	four_button.pressed.connect(_on_four_button_pressed)
-	eight_button.pressed.connect(_on_eight_button_pressed)
-	sixteen_button.pressed.connect(_on_sixteen_button_pressed)
+	_connect_speed_button(half_button)
+	_connect_speed_button(one_button)
+	_connect_speed_button(two_button)
+	_connect_speed_button(four_button)
+	_connect_speed_button(eight_button)
+	_connect_speed_button(sixteen_button)
 
 func _build_stat_entries() -> void:
 	_clear_children(resource_cards)
@@ -304,6 +318,9 @@ func _set_disconnected() -> void:
 	day_label.text = "DAY: N/A"
 	phase_label.text = "PHASE: N/A"
 	time_label.text = "HOUR: N/A"
+	_set_alerts_count(0)
+	_alert_acknowledged.clear()
+	_clear_alert_items()
 	for entry in _stat_entries:
 		var value_label_variant: Variant = entry.get("value_label")
 		var value_label := value_label_variant as Label
@@ -316,6 +333,123 @@ func _set_disconnected() -> void:
 			_apply_indicator_state(indicator_label, "neutral")
 		entry.last_display = ""
 		entry.last_numeric = NAN
+
+func _refresh_alerts() -> void:
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		_set_alerts_count(0)
+		_alert_acknowledged.clear()
+		_clear_alert_items()
+		return
+	var events: Array[Dictionary] = _sim_bridge.get_events()
+	if events.is_empty():
+		_set_alerts_count(0)
+		_alert_acknowledged.clear()
+		_clear_alert_items()
+		return
+	var alert_entries: Array[Dictionary] = []
+	for entry in events:
+		var visibility_value: Variant = entry.get("visibility", "")
+		var visibility := str(visibility_value)
+		if visibility == "sticky" or visibility == "modal":
+			alert_entries.append(entry)
+	_rebuild_alert_items(alert_entries)
+	_update_alert_count(alert_entries)
+
+func _rebuild_alert_items(entries: Array[Dictionary]) -> void:
+	_clear_alert_items()
+	for entry in entries:
+		var key := _alert_key(entry)
+		if key == "":
+			continue
+		var message := str(entry.get("message", ""))
+		var time_token := _alert_time_token(entry)
+		var label := Label.new()
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.text = "%s\n%s" % [time_token, message]
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 8)
+		row.add_child(label)
+
+		var acknowledged := _alert_acknowledged.has(key)
+		var ack_button := Button.new()
+		ack_button.text = "ACKNOWLEDGED" if acknowledged else "ACK"
+		ack_button.disabled = acknowledged
+		if not acknowledged:
+			ack_button.pressed.connect(Callable(self, "_on_alert_ack_pressed").bind(key))
+		row.add_child(ack_button)
+		alerts_items.add_child(row)
+
+func _clear_alert_items() -> void:
+	if alerts_items == null:
+		return
+	for child in alerts_items.get_children():
+		child.queue_free()
+
+func _update_alert_count(entries: Array[Dictionary]) -> void:
+	var unread := 0
+	for entry in entries:
+		var key := _alert_key(entry)
+		if key == "":
+			continue
+		if not _alert_acknowledged.has(key):
+			unread += 1
+	_set_alerts_count(unread)
+
+func _set_alerts_count(count: int) -> void:
+	if alerts_value != null:
+		alerts_value.text = str(count)
+
+func _alert_key(entry: Dictionary) -> String:
+	var key_value: Variant = entry.get("key", "")
+	var key := str(key_value)
+	if key != "":
+		return key
+	var type_token := str(entry.get("type", ""))
+	var day_token := str(entry.get("day", ""))
+	var hour_token := str(entry.get("hour", ""))
+	var message := str(entry.get("message", ""))
+	return "%s|%s|%s|%s" % [type_token, day_token, hour_token, message]
+
+func _alert_time_token(entry: Dictionary) -> String:
+	var day_value: Variant = entry.get("day", -1)
+	var hour_value: Variant = entry.get("hour", -1)
+	var day := int(day_value)
+	var hour := int(hour_value)
+	if day >= 0 and hour >= 0:
+		return "Day %d · Hour %02d" % [day, hour]
+	if day >= 0:
+		return "Day %d" % day
+	return "Time ?"
+
+func _on_alert_ack_pressed(key: String) -> void:
+	acknowledge_alert(key)
+
+func acknowledge_alert(key: String) -> void:
+	if key == "":
+		return
+	_alert_acknowledged[key] = true
+	_refresh_alerts()
+
+func _on_alerts_group_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
+			_set_alerts_drawer_visible(not _is_alerts_drawer_visible())
+
+func _on_alerts_close_pressed() -> void:
+	_set_alerts_drawer_visible(false)
+
+func _is_alerts_drawer_visible() -> bool:
+	return alerts_drawer != null and alerts_drawer.visible
+
+func _set_alerts_drawer_visible(visible: bool) -> void:
+	if alerts_drawer == null:
+		return
+	alerts_drawer.visible = visible
 
 func _determine_change_state(entry: Dictionary, current: Variant) -> String:
 	var numeric: float = _to_numeric(current)
@@ -356,28 +490,32 @@ func _on_pause_button_pressed() -> void:
 		return
 	_game.toggle_pause()
 
-func _on_half_button_pressed() -> void:
-	_set_speed_index(0)
-
-func _on_one_button_pressed() -> void:
-	_set_speed_index(1)
-
-func _on_two_button_pressed() -> void:
-	_set_speed_index(2)
-
-func _on_four_button_pressed() -> void:
-	_set_speed_index(3)
-
-func _on_eight_button_pressed() -> void:
-	_set_speed_index(4)
-
-func _on_sixteen_button_pressed() -> void:
-	_set_speed_index(5)
-
 func _set_speed_index(index: int) -> void:
 	if _game == null:
 		return
 	_game.set_speed_index(index)
+
+func _connect_speed_button(button: Button) -> void:
+	if button == null:
+		return
+	button.pressed.connect(Callable(self, "_on_speed_button_pressed").bind(button))
+
+func _on_speed_button_pressed(button: Button) -> void:
+	if _game == null or button == null:
+		return
+	var multiplier := _parse_speed_multiplier(button.text)
+	if multiplier <= 0.0:
+		return
+	_game.set_speed_multiplier(multiplier)
+
+func _parse_speed_multiplier(label: String) -> float:
+	var cleaned := str(label).strip_edges()
+	if cleaned == "":
+		return -1.0
+	var normalized := cleaned.to_lower()
+	if normalized.ends_with("x"):
+		normalized = normalized.substr(0, normalized.length() - 1).strip_edges()
+	return normalized.to_float()
 
 func _on_game_pacing_state_changed(_multiplier: float, _paused: bool) -> void:
 	_refresh_pacing_controls()

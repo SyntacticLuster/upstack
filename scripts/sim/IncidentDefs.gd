@@ -26,4 +26,25 @@ const INCIDENT_DEFS: Array[Dictionary] = [
 	},
 ]
 
+const STRUCTURAL_INCIDENT_DEFS: Array[Dictionary] = [
+	{
+		"id": "support_shift",
+		"level": 0,
+		"chance": 0.65,
+		"severity": "low",
+	},
+	{
+		"id": "floor_sag",
+		"level": 1,
+		"chance": 0.40,
+		"severity": "med",
+	},
+	{
+		"id": "structural_breach",
+		"level": 2,
+		"chance": 0.25,
+		"severity": "high",
+	},
+]
+
 const THREAT_THRESHOLDS: Array[int] = [10, 25, 40, 60, 80, 100]

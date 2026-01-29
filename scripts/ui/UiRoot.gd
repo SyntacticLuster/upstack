@@ -15,6 +15,11 @@ const LEDGER_MIN_HEIGHT := 225.0
 @onready var content_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentTabs
 @onready var console_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole
 @onready var ledger_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/LedgerPanel
+@onready var toast_panel: PanelContainer = $Root/ToastLayer/ToastPanel
+@onready var toast_label: Label = $Root/ToastLayer/ToastPanel/ToastLabel
+@onready var modal_layer: ColorRect = $Root/ModalLayer
+@onready var modal_message: Label = $Root/ModalLayer/ModalPanel/ModalRoot/ModalMessage
+@onready var modal_ack: Button = $Root/ModalLayer/ModalPanel/ModalRoot/ModalAcknowledge
 
 var _sim: Object = null
 var _game: Object = null
@@ -22,12 +27,30 @@ var _use_polling: bool = false
 var _poll_accum: float = 0.0
 var _layout_forced_left_rail: bool = false
 var _split_initialized: bool = false
+var _event_bridge: SimBridge = null
+var _seen_event_keys: Dictionary = {}
+var _toast_queue: Array[Dictionary] = []
+var _toast_active: bool = false
+var _toast_tween: Tween = null
+var _toast_cooldowns: Dictionary = {}
+var _modal_queue: Array[Dictionary] = []
+var _modal_active_key: String = ""
 
 func _ready() -> void:
 	_sim = _resolve_sim()
 	hud_panel.set_sim(_sim)
 	console_panel.set_sim(_sim)
 	ledger_panel.set_sim(_sim)
+	if _event_bridge == null:
+		_event_bridge = SimBridge.new()
+	_event_bridge.set_sim(_sim)
+	if toast_panel != null:
+		toast_panel.visible = false
+	if modal_layer != null:
+		modal_layer.visible = false
+	var modal_cb: Callable = Callable(self, "_on_modal_ack_pressed")
+	if modal_ack != null and not modal_ack.pressed.is_connected(modal_cb):
+		modal_ack.pressed.connect(modal_cb)
 
 	_game = _resolve_game()
 	if _game == null:
@@ -70,6 +93,7 @@ func _refresh_all() -> void:
 	hud_panel.refresh()
 	console_panel.refresh()
 	ledger_panel.refresh()
+	_refresh_event_routing()
 
 func _on_viewport_size_changed() -> void:
 	_apply_responsive_layout()
@@ -160,6 +184,123 @@ func _apply_split_ratio() -> void:
 	var top_height := int(max(0.0, total_height - ledger_target))
 	content_split.split_offset = top_height
 	_split_initialized = true
+
+func _refresh_event_routing() -> void:
+	if _event_bridge == null or not _event_bridge.has_sim():
+		return
+	var events: Array[Dictionary] = _event_bridge.get_events()
+	if events.is_empty():
+		_seen_event_keys.clear()
+		_toast_cooldowns.clear()
+		_toast_queue.clear()
+		_modal_queue.clear()
+		_modal_active_key = ""
+		_toast_active = false
+		if _toast_tween != null and _toast_tween.is_running():
+			_toast_tween.kill()
+		if toast_panel != null:
+			toast_panel.visible = false
+		if modal_layer != null:
+			modal_layer.visible = false
+		return
+	for entry in events:
+		var key := _event_key(entry)
+		if key == "":
+			continue
+		if _seen_event_keys.has(key):
+			continue
+		_seen_event_keys[key] = true
+		var visibility_value: Variant = entry.get("visibility", "")
+		var visibility := str(visibility_value)
+		match visibility:
+			"toast":
+				_maybe_queue_toast(entry)
+			"modal":
+				_queue_modal(entry)
+
+func _event_key(entry: Dictionary) -> String:
+	var key_value: Variant = entry.get("key", "")
+	var key := str(key_value)
+	if key != "":
+		return key
+	var type_token := str(entry.get("type", ""))
+	var day_token := str(entry.get("day", ""))
+	var hour_token := str(entry.get("hour", ""))
+	var message := str(entry.get("message", ""))
+	return "%s|%s|%s|%s" % [type_token, day_token, hour_token, message]
+
+func _maybe_queue_toast(entry: Dictionary) -> void:
+	var message := str(entry.get("message", ""))
+	if message == "":
+		return
+	var cooldown_key := _toast_cooldown_key(entry)
+	var current_hour := _event_bridge.get_hour_index()
+	var last_value: Variant = _toast_cooldowns.get(cooldown_key, -9999)
+	var last_hour := int(last_value)
+	if current_hour - last_hour < 6:
+		return
+	_toast_cooldowns[cooldown_key] = current_hour
+	_toast_queue.append({"message": message})
+	_show_next_toast()
+
+func _toast_cooldown_key(entry: Dictionary) -> String:
+	var type_token := str(entry.get("type", ""))
+	var source_token := str(entry.get("source", ""))
+	return "%s|%s" % [type_token, source_token]
+
+func _show_next_toast() -> void:
+	if _toast_active or _toast_queue.is_empty():
+		return
+	if toast_panel == null or toast_label == null:
+		return
+	var next_entry: Dictionary = _toast_queue.pop_front()
+	var message_text: String = String(next_entry.get("message", ""))
+	toast_label.text = message_text
+	toast_panel.modulate = Color(1, 1, 1, 0)
+	toast_panel.visible = true
+	if _toast_tween != null and _toast_tween.is_running():
+		_toast_tween.kill()
+	_toast_active = true
+	_toast_tween = create_tween()
+	_toast_tween.tween_property(toast_panel, "modulate", Color(1, 1, 1, 1), 0.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_toast_tween.tween_interval(2.2)
+	_toast_tween.tween_property(toast_panel, "modulate", Color(1, 1, 1, 0), 0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	_toast_tween.finished.connect(_on_toast_finished)
+
+func _on_toast_finished() -> void:
+	_toast_active = false
+	if toast_panel != null:
+		toast_panel.visible = false
+	_show_next_toast()
+
+func _queue_modal(entry: Dictionary) -> void:
+	_modal_queue.append(entry)
+	_show_next_modal()
+
+func _show_next_modal() -> void:
+	if modal_layer == null or modal_message == null:
+		return
+	if modal_layer.visible:
+		return
+	if _modal_queue.is_empty():
+		return
+	var entry: Dictionary = _modal_queue.pop_front()
+	var message := str(entry.get("message", ""))
+	if message == "":
+		return
+	_modal_active_key = _event_key(entry)
+	modal_message.text = message
+	modal_layer.visible = true
+
+func _on_modal_ack_pressed() -> void:
+	if modal_layer == null:
+		return
+	modal_layer.visible = false
+	if _modal_active_key != "" and hud_panel != null and hud_panel.has_method("acknowledge_alert"):
+		hud_panel.acknowledge_alert(_modal_active_key)
+		hud_panel.refresh()
+	_modal_active_key = ""
+	_show_next_modal()
 
 func _resolve_sim() -> Object:
 	var sim_ref: Object = null

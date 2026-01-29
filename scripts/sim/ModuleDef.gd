@@ -11,6 +11,9 @@ var delta_materials: int = 0
 var delta_morale: int = 0
 var delta_capacity: int = 0
 
+# Inputs consumed each day by modules that need resources to operate
+var inputs_per_day: Dictionary = {}
+
 # Power model
 var power_supply: int = 0   # generates
 var power_demand: int = 0   # consumes

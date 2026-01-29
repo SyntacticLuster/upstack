@@ -1,7 +1,7 @@
 
 extends PanelContainer
 
-const FILTERS: Array[String] = ["All", "Sim", "Events", "Debug"]
+const FILTERS: Array[String] = ["All", "Sim", "Events", "Debug", "Modules"]
 const MAX_VISIBLE := 300
 
 const FILTER_TO_CATEGORY := {
@@ -9,6 +9,7 @@ const FILTER_TO_CATEGORY := {
 	"Sim": "SIM",
 	"Events": "EVENT",
 	"Debug": "DEBUG",
+	"Modules": "MODULES",
 }
 
 const COLOR_NEUTRAL := Color(0.44, 0.50, 0.55)
@@ -30,20 +31,36 @@ const LEDGER_EXPANDED_MIN_HEIGHT := 225
 	"Sim": $Root/Filters/SimFilter,
 	"Events": $Root/Filters/EventsFilter,
 	"Debug": $Root/Filters/DebugFilter,
+	"Modules": $Root/Filters/ModulesFilter,
 }
 @onready var header_row: HBoxContainer = $Root/HeaderRow
 @onready var filters_row: HBoxContainer = $Root/Filters
 @onready var collapse_button: Button = $Root/HeaderRow/CollapseButton
 @onready var collapsed_preview: Label = $Root/CollapsedPreview
+@onready var modules_container: PanelContainer = $Root/ModulesContainer
+@onready var modules_roster: ItemList = $Root/ModulesContainer/ModulesSplit/ModulesRosterPanel/ModulesRoster
+@onready var inspector_id_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/ModuleIdLabel
+@onready var inspector_type_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/ModuleTypeLabel
+@onready var inspector_location_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/ModuleLocationLabel
+@onready var inspector_powered_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/ModulePoweredLabel
+@onready var inspector_online_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/ModuleOnlineLabel
+@onready var inspector_deltas_section: VBoxContainer = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/DeltasSection
+@onready var inspector_deltas_label: Label = $Root/ModulesContainer/ModulesSplit/ModuleInspectorPanel/InspectorContent/DeltasSection/DeltasLabel
 
 var _sim_bridge: SimBridge = null
 var _active_filter: String = "All"
 var _collapsed: bool = false
+var _module_snapshots: Array[Dictionary] = []
+var _last_event_filter: String = "All"
 
 func _ready() -> void:
 	_setup_filters()
 	collapse_button.pressed.connect(_on_collapse_pressed)
+	modules_roster.connect("item_selected", Callable(self, "_on_module_selected"))
+	modules_roster.select_mode = ItemList.SELECT_SINGLE
 	_update_collapse_state(false)
+	_clear_module_inspector()
+	_update_view_mode()
 
 func set_sim(sim_ref: Object) -> void:
 	if _sim_bridge == null:
@@ -51,10 +68,12 @@ func set_sim(sim_ref: Object) -> void:
 	_sim_bridge.set_sim(sim_ref)
 
 func refresh() -> void:
+	_refresh_modules_data()
 	if _sim_bridge == null or not _sim_bridge.has_sim():
 		status_label.text = "STATUS: DISCONNECTED"
 		_clear_items()
 		collapsed_preview.text = "LAST: -"
+		_update_view_mode()
 		return
 
 	var events: Array = _sim_bridge.get_events()
@@ -62,6 +81,7 @@ func refresh() -> void:
 		status_label.text = "STATUS: NO EVENTS"
 		_clear_items()
 		collapsed_preview.text = "LAST: -"
+		_update_view_mode()
 		return
 
 	var auto_scroll := _should_auto_scroll()
@@ -72,6 +92,7 @@ func refresh() -> void:
 
 	if auto_scroll:
 		call_deferred("_scroll_to_bottom")
+	_update_view_mode()
 
 func _setup_filters() -> void:
 	for filter_name in FILTERS:
@@ -86,11 +107,28 @@ func _setup_filters() -> void:
 func _on_filter_pressed(filter_name: String) -> void:
 	if not FILTERS.has(filter_name):
 		return
+
+	if filter_name == "Modules":
+		if _active_filter == "Modules":
+			_active_filter = _last_event_filter
+			_refresh_filter_buttons()
+			_apply_filter_to_all_rows()
+			_update_view_mode()
+			return
+		_last_event_filter = _active_filter if _active_filter != "Modules" else _last_event_filter
+		_active_filter = "Modules"
+		_refresh_filter_buttons()
+		_update_view_mode()
+		return
+
 	if _active_filter == filter_name:
 		return
+
 	_active_filter = filter_name
+	_last_event_filter = filter_name
 	_refresh_filter_buttons()
 	_apply_filter_to_all_rows()
+	_update_view_mode()
 
 func _refresh_filter_buttons() -> void:
 	for filter_name in FILTERS:
@@ -125,33 +163,31 @@ func _update_collapse_state(collapsed: bool) -> void:
 		scroll_container.visible = true
 		collapsed_preview.visible = false
 		custom_minimum_size = Vector2(custom_minimum_size.x, LEDGER_EXPANDED_MIN_HEIGHT)
+	_update_view_mode()
 
 func _normalize_events(events: Array) -> Array[Dictionary]:
 	var normalized: Array[Dictionary] = []
-	var last_batch: Dictionary = {}
 	for entry in events:
+		if not (entry is Dictionary):
+			continue
 		var category := _category_from_entry(entry)
 		var time_info := _time_info(entry)
 		var day := int(time_info.get("day", -1))
 		var hour := int(time_info.get("hour", -1))
-		if category == "SIM" and day >= 0 and hour >= 0:
-			if not last_batch.is_empty() and last_batch.get("category") == "SIM" and last_batch.get("day") == day and last_batch.get("hour") == hour:
-				var count := int(last_batch.get("count", 1)) + 1
-				last_batch["count"] = count
-				last_batch["message"] = "Hour %02d: %d resource updates" % [hour, count]
-				normalized[normalized.size() - 1] = last_batch
-				continue
-		var message := _format_message(entry)
+		var message := str(entry.get("message", ""))
+		if message == "":
+			message = _format_message(entry)
+		var visibility := str(entry.get("visibility", "dev_only"))
+		var severity := str(entry.get("severity", "debug"))
 		var row := {
 			"day": day,
 			"hour": hour,
 			"category": category,
 			"message": message,
 			"count": 1,
+			"visibility": visibility,
+			"severity": severity,
 		}
-		if category == "SIM" and day >= 0 and hour >= 0:
-			row["message"] = "Hour %02d: 1 resource update" % hour
-		last_batch = row
 		normalized.append(row)
 	return normalized
 
@@ -194,6 +230,8 @@ func _append_event(entry: Dictionary) -> void:
 	list_container.add_child(row)
 
 	row.set_meta("category", category)
+	row.set_meta("visibility", str(entry.get("visibility", "dev_only")))
+	row.set_meta("severity", str(entry.get("severity", "debug")))
 
 func _trim_to_limit() -> void:
 	while list_container.get_child_count() > MAX_VISIBLE:
@@ -260,6 +298,139 @@ func _update_collapsed_preview(entries: Array[Dictionary]) -> void:
 	var last_entry := entries[entries.size() - 1]
 	collapsed_preview.text = "LAST: %s" % _truncate_message(str(last_entry.get("message", "")))
 
+func _update_view_mode() -> void:
+	var modules_active: bool = not _collapsed and _active_filter == "Modules"
+	modules_container.visible = modules_active
+	scroll_container.visible = not _collapsed and not modules_active
+	status_label.visible = not _collapsed and not modules_active
+	collapsed_preview.visible = _collapsed and _active_filter != "Modules"
+	if modules_active:
+		_refresh_modules_data()
+
+func _refresh_modules_data() -> void:
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		_module_snapshots.clear()
+		modules_roster.clear()
+		_clear_module_inspector()
+		return
+
+	var snapshots := _sim_bridge.get_module_snapshots()
+	if not (snapshots is Array):
+		snapshots = []
+	snapshots = snapshots.duplicate(true)
+	if snapshots.is_empty():
+		_module_snapshots = []
+		modules_roster.clear()
+		_clear_module_inspector()
+		return
+
+	snapshots.sort_custom(Callable(self, "_module_snapshot_compare"))
+	_module_snapshots = snapshots
+	modules_roster.clear()
+	for snapshot in _module_snapshots:
+		if snapshot is Dictionary:
+			modules_roster.add_item(_format_module_row(snapshot))
+		else:
+			modules_roster.add_item("module")
+
+	if modules_roster.get_item_count() > 0:
+		modules_roster.select(0)
+		_on_module_selected(0)
+	else:
+		_clear_module_inspector()
+
+func _format_module_row(snapshot: Dictionary) -> String:
+	if snapshot == null:
+		return "unknown module"
+	var floor := int(snapshot.get("floor", -1))
+	var x := int(snapshot.get("x", -1))
+	var y := int(snapshot.get("y", -1))
+	var name := str(snapshot.get("name", snapshot.get("type", "unknown"))).to_upper()
+	var powered := "yes" if bool(snapshot.get("powered", false)) else "no"
+	var online := "yes" if bool(snapshot.get("online", false)) else "no"
+	var id := str(snapshot.get("id", "-"))
+	return "F%d (%d,%d) %s powered:%s online:%s id:%s" % [floor, x, y, name, powered, online, id]
+
+func _module_snapshot_compare(a: Dictionary, b: Dictionary) -> bool:
+	if not (a is Dictionary) or not (b is Dictionary):
+		return false
+	var afloor := int(a.get("floor", 0))
+	var bfloor := int(b.get("floor", 0))
+	if afloor != bfloor:
+		return afloor < bfloor
+	var ay := int(a.get("y", 0))
+	var by := int(b.get("y", 0))
+	if ay != by:
+		return ay < by
+	var ax := int(a.get("x", 0))
+	var bx := int(b.get("x", 0))
+	if ax != bx:
+		return ax < bx
+	var a_type := str(a.get("type", "")).to_lower()
+	var b_type := str(b.get("type", "")).to_lower()
+	if a_type != b_type:
+		return a_type < b_type
+	return false
+
+func _on_module_selected(index: int) -> void:
+	if index < 0 or index >= _module_snapshots.size():
+		_clear_module_inspector()
+		return
+	var snapshot := _module_snapshots[index]
+	if snapshot is Dictionary:
+		_update_inspector(snapshot)
+	else:
+		_clear_module_inspector()
+
+func _clear_module_inspector() -> void:
+	inspector_id_label.text = "ID: -"
+	inspector_type_label.text = "Type: -"
+	inspector_location_label.text = "Location: -"
+	inspector_powered_label.text = "Powered: -"
+	inspector_online_label.text = "Online: -"
+	inspector_deltas_section.visible = false
+	inspector_deltas_label.text = ""
+
+func _update_inspector(snapshot: Dictionary) -> void:
+	if snapshot == null:
+		_clear_module_inspector()
+		return
+	var id_text := str(snapshot.get("id", "-"))
+	var type_text := str(snapshot.get("name", snapshot.get("type", "-")))
+	var floor := int(snapshot.get("floor", -1))
+	var x := int(snapshot.get("x", -1))
+	var y := int(snapshot.get("y", -1))
+	var powered_text := "yes" if bool(snapshot.get("powered", false)) else "no"
+	var online_text := "yes" if bool(snapshot.get("online", false)) else "no"
+	inspector_id_label.text = "ID: %s" % id_text
+	inspector_type_label.text = "Type: %s" % type_text
+	inspector_location_label.text = "Location: F%d (%d,%d)" % [floor, x, y]
+	inspector_powered_label.text = "Powered: %s" % powered_text
+	inspector_online_label.text = "Online: %s" % online_text
+	var delta_summary := _format_module_deltas(snapshot.get("deltas", {}))
+	if delta_summary != "":
+		inspector_deltas_section.visible = true
+		inspector_deltas_label.text = delta_summary
+	else:
+		inspector_deltas_section.visible = false
+		inspector_deltas_label.text = ""
+
+func _format_module_deltas(deltas: Dictionary) -> String:
+	if deltas == null or not (deltas is Dictionary):
+		return ""
+	var keys: Array = deltas.keys()
+	if keys.is_empty():
+		return ""
+	keys.sort()
+	var parts: Array[String] = []
+	for key in keys:
+		var value := int(deltas.get(key, 0))
+		if value == 0:
+			continue
+		var sign := "+" if value > 0 else "-"
+		parts.append("%s%s %d" % [sign, key, abs(value)])
+	return ", ".join(parts)
+
 func _vertical_scrollbar() -> VScrollBar:
 	if scroll_container == null:
 		return null
@@ -278,26 +449,45 @@ func _scroll_to_bottom() -> void:
 	scrollbar.value = scrollbar.max_value
 
 func _apply_filter_to_all_rows() -> void:
+	if _active_filter == "Modules":
+		return
 	for row in list_container.get_children():
 		var category: String = str(row.get_meta("category", "DEBUG"))
-		row.visible = _matches_filter(category)
+		var visibility: String = str(row.get_meta("visibility", "dev_only"))
+		var severity: String = str(row.get_meta("severity", "debug"))
+		row.visible = _matches_filter(category, visibility, severity)
 
-func _matches_filter(category: String) -> bool:
+func _matches_filter(category: String, visibility: String, severity: String) -> bool:
 	var filter_token: String = str(FILTER_TO_CATEGORY.get(_active_filter, "ALL"))
 	if filter_token == "ALL":
 		return true
-	return category == filter_token
+	match filter_token:
+		"DEBUG":
+			return visibility == "dev_only" or severity == "debug"
+		"SIM":
+			return visibility in ["player_feed", "toast", "sticky", "modal"]
+		"EVENT":
+			return visibility in ["sticky", "modal"]
+		"MODULES":
+			return true
+		_:
+			return category == filter_token
 
 func _category_from_entry(entry: Variant) -> String:
 	if entry is Dictionary:
-		var label := str(entry.get("category", entry.get("type", entry.get("lever_id", "")))).to_upper()
-		var matched := _match_category_token(label)
-		if matched != "":
-			return matched
-		var hint := _message_hint(entry)
-		matched = _match_category_token(hint)
-		if matched != "":
-			return matched
+		var category_value: Variant = entry.get("category", "")
+		var category := str(category_value).to_upper()
+		if category != "":
+			return category
+		var visibility_value: Variant = entry.get("visibility", "")
+		var visibility := str(visibility_value)
+		match visibility:
+			"player_feed", "toast":
+				return "SIM"
+			"sticky", "modal":
+				return "EVENT"
+			"dev_only":
+				return "DEBUG"
 	else:
 		var raw := str(entry).to_upper()
 		var matched := _match_category_token(raw)

@@ -17,6 +17,9 @@ var morale: int = 50
 var threat: int = 0
 var morale_ceiling: float = 100.0
 var staying_index: float = 0.0
+var attention_multiplier: float = 1.0
+var collapse_debt: float = 0.0
+var strain: float = 0.0
 
 # People
 var population: int = 5
@@ -49,6 +52,9 @@ func clamp_all() -> void:
 	population = max(population, 0)
 	power_supply = max(power_supply, 0)
 	power_used = max(power_used, 0)
+	collapse_debt = max(collapse_debt, 0.0)
+	strain = clamp(strain, 0.0, 100.0)
+	attention_multiplier = max(attention_multiplier, 0.0)
 
 func reset_deltas() -> void:
 	_deltas.clear()
@@ -61,18 +67,62 @@ func add_delta(key: String, amount: int) -> void:
 		return
 	_deltas[key] = int(_deltas.get(key, 0)) + amount
 
+func get_amount(key: String) -> int:
+	match key:
+		"food":
+			return food
+		"water":
+			return water
+		"materials":
+			return materials
+		"morale":
+			return morale
+		"threat":
+			return threat
+		"population":
+			return population
+		"power_supply":
+			return power_supply
+		"power_used":
+			return power_used
+		_:
+			push_error("Unknown resource key in get_amount: %s" % key)
+			return 0
+
+func set_amount(key: String, value: int) -> void:
+	var normalized: int = int(value)
+	match key:
+		"food":
+			food = normalized
+		"water":
+			water = normalized
+		"materials":
+			materials = normalized
+		"morale":
+			morale = normalized
+		"threat":
+			threat = normalized
+		"population":
+			population = normalized
+		"power_supply":
+			power_supply = normalized
+		"power_used":
+			power_used = normalized
+		_:
+			push_error("Unknown resource key in set_amount: %s" % key)
+
 func apply_deltas() -> void:
 	for key in _RESOURCE_KEYS:
 		var delta: int = int(_deltas.get(key, 0))
 		if delta == 0:
 			continue
-		var current_value = get(key)
-		set(key, current_value + delta)
+		var current_value: int = get_amount(key)
+		set_amount(key, current_value + delta)
 
 func snapshot() -> String:
 	var parts: Array[String] = []
 	for key in _RESOURCE_KEYS:
-		parts.append("%s=%s" % [key, str(get(key))])
+		parts.append("%s=%s" % [key, str(get_amount(key))])
 	return ",".join(parts)
 
 func summary() -> String:

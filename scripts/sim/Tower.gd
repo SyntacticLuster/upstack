@@ -3,8 +3,9 @@ class_name Tower
 
 var width: int
 var height: int
-var floors: Array = []
-var module_states: Dictionary = {}
+
+var floors: Array[Variant] = []  # each element is a grid (an Array)
+var module_states: Dictionary[String, Variant] = {}  # avoids Dictionary[String, Dictionary] inference
 
 func _init(w: int = 6, h: int = 6) -> void:
 	width = w
@@ -12,14 +13,13 @@ func _init(w: int = 6, h: int = 6) -> void:
 	add_floor()
 
 func add_floor() -> void:
-	var grid := []
+	var grid: Array[Variant] = []
 	for y in range(height):
-		var row := []
+		var row: Array[Variant] = []
 		for x in range(width):
 			row.append(null)
 		grid.append(row)
 	floors.append(grid)
-
 func floor_count() -> int:
 	return floors.size()
 
