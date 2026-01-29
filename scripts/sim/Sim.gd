@@ -1382,7 +1382,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		ration_consumption_multiplier_today = multiplier
 		var scar_gain := RATION_SCAR_PER_DAY_HARD if hard else RATION_SCAR_PER_DAY_SOFT
 		ration_scar += scar_gain
-		ration_scar = snapped(ration_scar, SIM_FLOAT_SNAP)
+		ration_scar = snappedf(ration_scar, SIM_FLOAT_SNAP)
 		_obs_push(obs, "LEVER_RATION@%s" % ration_hardening_mode)
 		_log_lever_event(
 			sim_day,
@@ -1416,7 +1416,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		var intensity := labor_overdrive_intensity
 		labor_output_multiplier_today = 1.0 + (float(intensity) * LABOR_OVERDRIVE_MULT_PER_LEVEL)
 		labor_scar += float(intensity) * LABOR_SCAR_PER_DAY
-		labor_scar = snapped(labor_scar, SIM_FLOAT_SNAP)
+		labor_scar = snappedf(labor_scar, SIM_FLOAT_SNAP)
 		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_LABOR@%d" % intensity)
 		_log_lever_event(
@@ -1452,7 +1452,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		expedition_yield_bonus_per_crew_today = intensity * EXPEDITION_COMPRESSION_YIELD_PER_CREW
 		expedition_attention_bonus_per_trip_today = intensity * EXPEDITION_ATTENTION_PER_TRIP
 		expedition_attention += float(intensity * EXPEDITION_ATTENTION_PER_DAY)
-		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
 		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_EXPEDITION@%d" % intensity)
 		_log_lever_event(
@@ -1785,7 +1785,7 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 
 	if expedition_attention_bonus_per_trip_today > 0:
 		expedition_attention += float(expedition_attention_bonus_per_trip_today)
-		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
 		_obs_push(obs, "ATTN+%d" % expedition_attention_bonus_per_trip_today)
 
 	if not scav_pools.has(target):
@@ -1980,7 +1980,7 @@ func _process_structural_collapse_entry(sim_res: Resources, obs: Array[String], 
 		sim_res.morale -= STRUCTURAL_COLLAPSE_MORALE_PENALTY
 		sim_res.materials = max(sim_res.materials - STRUCTURAL_COLLAPSE_MATERIALS_LOSS, 0)
 		sim_res.collapse_debt += STRUCTURAL_COLLAPSE_DEBT_PENALTY
-		sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+		sim_res.collapse_debt = snappedf(sim_res.collapse_debt, SIM_FLOAT_SNAP)
 		_obs_push(obs, "STRUCT_COLLAPSE@%0.2f" % sim_res.collapse_debt)
 		_structural_warning_logged = false
 
@@ -1997,7 +1997,7 @@ func _phase_baselines(sim_res: Resources, _obs: Array[String]) -> void:
 		staying_step += 0.5
 
 	sim_res.staying_index += staying_step
-	sim_res.staying_index = snapped(sim_res.staying_index, SIM_FLOAT_SNAP)
+	sim_res.staying_index = snappedf(sim_res.staying_index, SIM_FLOAT_SNAP)
 
 	var ceiling_decay: float = 0.05 + (staying_step * 0.02) + (sim_res.staying_index * 0.001)
 	if sim_res.days_without_food >= 3:
@@ -2208,7 +2208,7 @@ func _apply_throttled_morale_penalty(sim_res: Resources, amount: int, obs: Array
 		sim_res.morale -= reduced
 	if deferred > 0:
 		info_throttle_backlog += float(deferred)
-		info_throttle_backlog = snapped(info_throttle_backlog, SIM_FLOAT_SNAP)
+		info_throttle_backlog = snappedf(info_throttle_backlog, SIM_FLOAT_SNAP)
 		if tag != "":
 			_obs_push(obs, "THROTTLED@%s@%d" % [tag, deferred])
 
@@ -2257,7 +2257,7 @@ func _phase_pressure_accrual(
 	var attention_delta: float = _signature_attention_delta(total_noise, total_heat, sim_res.attention_multiplier)
 	if attention_delta > 0.0:
 		expedition_attention += attention_delta
-		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		expedition_attention = snappedf(expedition_attention, SIM_FLOAT_SNAP)
 
 	# If morale is collapsing, people make mistakes -> more threat
 	var morale_for_threat: int = sim_res.morale + maintenance_morale_penalty
@@ -2282,13 +2282,13 @@ func _phase_structural_risk(
 
 	sim_res.strain += strain_gain
 	sim_res.strain = max(sim_res.strain - STRUCTURAL_STRAIN_DECAY, 0.0)
-	sim_res.strain = snapped(sim_res.strain, SIM_FLOAT_SNAP)
+	sim_res.strain = snappedf(sim_res.strain, SIM_FLOAT_SNAP)
 
 	if maintenance_deficit > 0:
 		sim_res.collapse_debt += float(maintenance_deficit) * STRUCTURAL_COLLAPSE_DEBT_SCALE
 	elif sim_res.collapse_debt > 0.0:
 		sim_res.collapse_debt = max(sim_res.collapse_debt - STRUCTURAL_COLLAPSE_DECAY, 0.0)
-	sim_res.collapse_debt = snapped(sim_res.collapse_debt, SIM_FLOAT_SNAP)
+	sim_res.collapse_debt = snappedf(sim_res.collapse_debt, SIM_FLOAT_SNAP)
 
 	var prev_level := _structural_telegraph_level
 	var new_level := _structural_level_for_strain(sim_res.strain)
@@ -2323,7 +2323,7 @@ func _signature_attention_delta(noise: int, heat: int, multiplier: float) -> flo
 	var base: float = float(noise + heat) * 0.05
 	var clamped_multiplier: float = max(multiplier, 0.0)
 	var amount: float = base * clamped_multiplier
-	return snapped(amount, SIM_FLOAT_SNAP)
+	return snappedf(amount, SIM_FLOAT_SNAP)
 
 func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String]) -> Dictionary:
 	# Phase E: resolution (counters, population loss, clamp)
@@ -2470,14 +2470,14 @@ func _state_signature() -> String:
 	parts.append("day=%d" % day)
 	parts.append("hour_idx=%d" % hour_index)
 	parts.append("res=%s" % res.snapshot())
-	parts.append("staying=%.2f" % snapped(res.staying_index, SIM_FLOAT_SNAP))
+	parts.append("staying=%.2f" % snappedf(res.staying_index, SIM_FLOAT_SNAP))
 	parts.append("morale_ceiling=%.2f" % res.morale_ceiling)
 	parts.append("attention_mult=%.2f" % res.attention_multiplier)
-	parts.append("expedition_attention=%.2f" % snapped(expedition_attention, SIM_FLOAT_SNAP))
-	parts.append("strain=%.2f" % snapped(res.strain, SIM_FLOAT_SNAP))
-	parts.append("collapse_debt=%.2f" % snapped(res.collapse_debt, SIM_FLOAT_SNAP))
-	parts.append("ration_scar=%.2f" % snapped(ration_scar, SIM_FLOAT_SNAP))
-	parts.append("labor_scar=%.2f" % snapped(labor_scar, SIM_FLOAT_SNAP))
+	parts.append("expedition_attention=%.2f" % snappedf(expedition_attention, SIM_FLOAT_SNAP))
+	parts.append("strain=%.2f" % snappedf(res.strain, SIM_FLOAT_SNAP))
+	parts.append("collapse_debt=%.2f" % snappedf(res.collapse_debt, SIM_FLOAT_SNAP))
+	parts.append("ration_scar=%.2f" % snappedf(ration_scar, SIM_FLOAT_SNAP))
+	parts.append("labor_scar=%.2f" % snappedf(labor_scar, SIM_FLOAT_SNAP))
 	parts.append("conversion_scar=%d" % conversion_scar)
 	var abandoned_keys := abandoned_modules.keys()
 	abandoned_keys.sort()
