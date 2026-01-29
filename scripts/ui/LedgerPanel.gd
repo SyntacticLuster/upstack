@@ -19,6 +19,8 @@ const CATEGORY_COLORS := {
 	"EVENT": COLOR_DANGER,
 	"DEBUG": COLOR_DEBUG,
 }
+const LEDGER_COLLAPSED_HEIGHT := 40
+const LEDGER_EXPANDED_MIN_HEIGHT := 225
 
 @onready var status_label: Label = $Root/Status
 @onready var scroll_container: ScrollContainer = $Root/Scroll
@@ -113,7 +115,7 @@ func _update_collapse_state(collapsed: bool) -> void:
 		status_label.visible = false
 		scroll_container.visible = false
 		collapsed_preview.visible = true
-		custom_minimum_size = Vector2(custom_minimum_size.x, 40)
+		custom_minimum_size = Vector2(custom_minimum_size.x, LEDGER_COLLAPSED_HEIGHT)
 	else:
 		if collapse_button.get_parent() != header_row:
 			collapse_button.reparent(header_row)
@@ -122,7 +124,7 @@ func _update_collapse_state(collapsed: bool) -> void:
 		status_label.visible = true
 		scroll_container.visible = true
 		collapsed_preview.visible = false
-		custom_minimum_size = Vector2(custom_minimum_size.x, 120)
+		custom_minimum_size = Vector2(custom_minimum_size.x, LEDGER_EXPANDED_MIN_HEIGHT)
 
 func _normalize_events(events: Array) -> Array[Dictionary]:
 	var normalized: Array[Dictionary] = []
@@ -258,14 +260,19 @@ func _update_collapsed_preview(entries: Array[Dictionary]) -> void:
 	var last_entry := entries[entries.size() - 1]
 	collapsed_preview.text = "LAST: %s" % _truncate_message(str(last_entry.get("message", "")))
 
+func _vertical_scrollbar() -> VScrollBar:
+	if scroll_container == null:
+		return null
+	return scroll_container.get_v_scroll_bar()
+
 func _should_auto_scroll() -> bool:
-	var scrollbar: VScrollBar = scroll_container.get_v_scrollbar()
+	var scrollbar: VScrollBar = _vertical_scrollbar()
 	if scrollbar == null:
 		return true
 	return scrollbar.value >= scrollbar.max_value - 4
 
 func _scroll_to_bottom() -> void:
-	var scrollbar: VScrollBar = scroll_container.get_v_scrollbar()
+	var scrollbar: VScrollBar = _vertical_scrollbar()
 	if scrollbar == null:
 		return
 	scrollbar.value = scrollbar.max_value
@@ -334,3 +341,13 @@ func _apply_chip_style(chip: PanelContainer, color: Color) -> void:
 	style.content_margin_top = 2
 	style.content_margin_bottom = 2
 	chip.add_theme_stylebox_override("panel", style)
+
+func _cleanup_sim_bridge() -> void:
+	if _sim_bridge == null:
+		return
+	if not _sim_bridge.is_queued_for_deletion():
+		_sim_bridge.queue_free()
+	_sim_bridge = null
+
+func _exit_tree() -> void:
+	_cleanup_sim_bridge()

@@ -577,8 +577,8 @@ When an event row is clicked, expand to show:
 | Hour label | `sim.hour_of_day` | Every tick |
 | Resource values | `sim.res.food`, `.water`, `.materials` | Every tick |
 | Status values | `sim.res.morale`, `.threat`, `.population` | Every tick |
-| Lever active state | `sim.ration_hardening_ticks_left > 0`, etc. | Every tick |
-| Lever remaining time | `sim.ration_hardening_ticks_left`, etc. | Every tick |
+| Lever active state | `sim.ration_hardening_hours_left > 0`, etc. | Every tick |
+| Lever remaining time | `sim.ration_hardening_hours_left`, etc. | Every tick |
 | Events list | `sim.lever_events` | On append |
 | Conversion burn counts | `sim.conversion_burn_counts` | On change |
 

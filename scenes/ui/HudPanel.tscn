@@ -60,6 +60,12 @@ text = "2×"
 [node name="FourButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
 text = "4×"
 
+[node name="EightButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "8×"
+
+[node name="SixteenButton" type="Button" parent="Root/TopBarPanel/TopBar/TimeControlsRow"]
+text = "16×"
+
 [node name="TimeControlsColumn" type="VBoxContainer" parent="Root/TopBarPanel/TopBar"]
 visible = false
 custom_constants/separation = 6

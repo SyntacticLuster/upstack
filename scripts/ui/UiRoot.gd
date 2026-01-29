@@ -6,6 +6,8 @@ extends CanvasLayer
 
 const BREAKPOINT_TABS := 800.0
 const BREAKPOINT_RAIL_COLLAPSE := 800.0
+const LEDGER_DEFAULT_RATIO := 0.2
+const LEDGER_MIN_HEIGHT := 225.0
 
 @onready var root_control: Control = $Root
 @onready var hud_panel = $Root/Layout/HudPanel
@@ -28,6 +30,8 @@ func _ready() -> void:
 	ledger_panel.set_sim(_sim)
 
 	_game = _resolve_game()
+	if _game == null:
+		push_warning("UIRoot: unable to resolve Game node for HUD updates")
 	hud_panel.set_game(_game)
 	if _game != null and _game.has_signal("pacing_state_changed"):
 		_game.connect("pacing_state_changed", Callable(self, "_on_game_pacing_state_changed"))
@@ -151,7 +155,10 @@ func _apply_split_ratio() -> void:
 	if content_split.size.y <= 0.0:
 		call_deferred("_apply_split_ratio")
 		return
-	content_split.split_offset = int(content_split.size.y * 0.65)
+	var total_height := content_split.size.y
+	var ledger_target := int(max(LEDGER_MIN_HEIGHT, total_height * LEDGER_DEFAULT_RATIO))
+	var top_height := int(max(0.0, total_height - ledger_target))
+	content_split.split_offset = top_height
 	_split_initialized = true
 
 func _resolve_sim() -> Object:
@@ -164,12 +171,42 @@ func _resolve_sim() -> Object:
 		sim_ref = get_tree().get_root().find_child("Sim", true, false)
 	return sim_ref
 
-func _resolve_game() -> Object:
-	var game_ref: Object = null
-	if game_path != NodePath(""):
-		var node := get_node_or_null(game_path)
-		if node != null:
-			game_ref = node
-	if game_ref == null:
-		game_ref = get_tree().get_root().find_child("Game", true, false)
-	return game_ref
+func _resolve_game() -> Game:
+	var candidate := _resolve_game_from_parent()
+	if candidate != null:
+		return candidate
+	candidate = _resolve_game_from_current_scene()
+	if candidate != null:
+		return candidate
+	candidate = _resolve_game_from_path()
+	if candidate != null:
+		return candidate
+	return _resolve_game_from_tree()
+
+func _resolve_game_from_parent() -> Game:
+	var parent_game := get_parent()
+	return parent_game if _is_game_node(parent_game) else null
+
+func _resolve_game_from_current_scene() -> Game:
+	var current_scene := get_tree().get_current_scene()
+	return current_scene if _is_game_node(current_scene) else null
+
+func _resolve_game_from_path() -> Game:
+	if game_path == NodePath(""):
+		return null
+	var node := get_node_or_null(game_path)
+	if node == null:
+		push_warning("UIRoot: game_path %s did not resolve to a node" % game_path)
+		return null
+	if _is_game_node(node):
+		return node
+	push_warning("UIRoot: node at %s is %s, expected Game" % [game_path, node.get_class()])
+	return null
+
+func _resolve_game_from_tree() -> Game:
+	var tree_root := get_tree().get_root()
+	var found := tree_root.find_child("Game", true, false)
+	return found if _is_game_node(found) else null
+
+func _is_game_node(node: Object) -> bool:
+	return node != null and node is Game

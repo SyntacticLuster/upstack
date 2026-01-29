@@ -33,6 +33,8 @@ const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 @onready var one_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/OneButton
 @onready var two_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/TwoButton
 @onready var four_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/FourButton
+@onready var eight_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/EightButton
+@onready var sixteen_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/SixteenButton
 @onready var time_controls_row: HBoxContainer = $Root/TopBarPanel/TopBar/TimeControlsRow
 @onready var time_controls_column: VBoxContainer = $Root/TopBarPanel/TopBar/TimeControlsColumn
 
@@ -99,6 +101,10 @@ func set_time_controls_vertical(use_column: bool) -> void:
 			two_button.reparent(time_controls_column)
 		if four_button.get_parent() != time_controls_column:
 			four_button.reparent(time_controls_column)
+		if eight_button.get_parent() != time_controls_column:
+			eight_button.reparent(time_controls_column)
+		if sixteen_button.get_parent() != time_controls_column:
+			sixteen_button.reparent(time_controls_column)
 		time_controls_row.visible = false
 		time_controls_column.visible = true
 	else:
@@ -112,6 +118,10 @@ func set_time_controls_vertical(use_column: bool) -> void:
 			two_button.reparent(time_controls_row)
 		if four_button.get_parent() != time_controls_row:
 			four_button.reparent(time_controls_row)
+		if eight_button.get_parent() != time_controls_row:
+			eight_button.reparent(time_controls_row)
+		if sixteen_button.get_parent() != time_controls_row:
+			sixteen_button.reparent(time_controls_row)
 		time_controls_row.visible = true
 		time_controls_column.visible = false
 
@@ -151,6 +161,8 @@ func _connect_pacing_buttons() -> void:
 	one_button.pressed.connect(_on_one_button_pressed)
 	two_button.pressed.connect(_on_two_button_pressed)
 	four_button.pressed.connect(_on_four_button_pressed)
+	eight_button.pressed.connect(_on_eight_button_pressed)
+	sixteen_button.pressed.connect(_on_sixteen_button_pressed)
 
 func _build_stat_entries() -> void:
 	_clear_children(resource_cards)
@@ -356,6 +368,12 @@ func _on_two_button_pressed() -> void:
 func _on_four_button_pressed() -> void:
 	_set_speed_index(3)
 
+func _on_eight_button_pressed() -> void:
+	_set_speed_index(4)
+
+func _on_sixteen_button_pressed() -> void:
+	_set_speed_index(5)
+
 func _set_speed_index(index: int) -> void:
 	if _game == null:
 		return
@@ -373,7 +391,7 @@ func _refresh_pacing_controls() -> void:
 		active_index = _game.get_speed_index()
 	pause_button.text = "RESUME" if paused else "PAUSE"
 	pause_button.disabled = not has_game
-	var speed_buttons: Array[Button] = [half_button, one_button, two_button, four_button]
+	var speed_buttons: Array[Button] = [half_button, one_button, two_button, four_button, eight_button, sixteen_button]
 	for idx in range(speed_buttons.size()):
 		var button: Button = speed_buttons[idx]
 		button.disabled = not has_game or idx == active_index

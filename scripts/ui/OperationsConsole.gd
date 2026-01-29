@@ -28,11 +28,11 @@ const LEVER_BASE_PATHS := {
 	LEVER_EMERGENCY_CONVERSION: "SectionConversions/ConversionContent/EmergencyConversion",
 }
 
-const LEVER_TICKS_LEFT_KEYS := {
-	LEVER_RATION_HARDENING: "ration_hardening_ticks_left",
-	LEVER_LABOR_OVERDRIVE: "labor_overdrive_ticks_left",
-	LEVER_EXPEDITION_COMPRESSION: "expedition_compression_ticks_left",
-	LEVER_INFORMATION_THROTTLING: "info_throttle_ticks_left",
+const LEVER_HOURS_LEFT_KEYS := {
+	LEVER_RATION_HARDENING: "ration_hardening_hours_left",
+	LEVER_LABOR_OVERDRIVE: "labor_overdrive_hours_left",
+	LEVER_EXPEDITION_COMPRESSION: "expedition_compression_hours_left",
+	LEVER_INFORMATION_THROTTLING: "info_throttle_hours_left",
 }
 
 const LEVER_METADATA := {
@@ -212,6 +212,27 @@ var _lever_nodes: Dictionary = {}
 var _input_controls_ready: bool = false
 var _last_results: Dictionary = {}
 var _ration_pulse_tween: Tween = null
+func _variant_to_int(value: Variant) -> int:
+	if value == null:
+		return 0
+	match typeof(value):
+		TYPE_INT:
+			return value as int
+		TYPE_FLOAT:
+			var float_value: float = value as float
+			var truncated_value: float
+			if float_value >= 0.0:
+				truncated_value = floor(float_value)
+			else:
+				truncated_value = ceil(float_value)
+			return truncated_value as int
+		TYPE_STRING:
+			var text := str(value).strip_edges()
+			if text.is_valid_int():
+				return text.to_int()
+			return 0
+		_:
+			return 0
 func _require_section_node(path: String, type_name: String) -> Node:
 	if _sections_root == null:
 		push_error("OperationsConsole missing sections root while resolving %s (expected %s)" % [str(path), type_name])
@@ -493,7 +514,7 @@ func _refresh_conversion_options() -> void:
 	var previously_selected := _selected_conversion_key()
 	conversion_from.clear()
 	for key in RESOURCE_OPTIONS:
-		var count := int(burns.get(key, 0))
+		var count: int = _variant_to_int(burns.get(key, 0))
 		var suffix := "[%d/3]" % count
 		var label := "%s %s" % [key, suffix]
 		if count >= 3:
@@ -524,7 +545,7 @@ func _update_conversion_highlight(burns: Dictionary) -> void:
 		return
 	var selected_text := conversion_from.get_item_text(conversion_from.selected)
 	var key := selected_text.split(" ")[0]
-	var count := int(burns.get(key, 0))
+	var count: int = _variant_to_int(burns.get(key, 0))
 	if count >= 3:
 		conversion_from.modulate = COLOR_LOCKED
 	elif count >= 2:
@@ -549,10 +570,11 @@ func _apply_lever_status(lever_id: String) -> void:
 	var status_color := COLOR_NEUTRAL
 	var ration_active := false
 	if lever_id == LEVER_EMERGENCY_CONVERSION:
-		var burns := _conversion_burns()
-		var selected_key := _selected_conversion_key()
-		var burn_count := int(burns.get(selected_key, 0))
-		var scar := int(_read_sim_value("conversion_scar"))
+		var burns: Dictionary = _conversion_burns()
+		var selected_key: String = _selected_conversion_key()
+		var burn_count: int = _variant_to_int(burns.get(selected_key, 0))
+		var scar_value: Variant = _read_sim_value("conversion_scar")
+		var scar: int = _variant_to_int(scar_value)
 		if burn_count >= 3:
 			status_text = "BURNED OUT"
 			status_color = COLOR_LOCKED
@@ -562,11 +584,11 @@ func _apply_lever_status(lever_id: String) -> void:
 		else:
 			status_text = "INACTIVE"
 			status_color = COLOR_NEUTRAL
-	elif LEVER_TICKS_LEFT_KEYS.has(lever_id):
-		var ticks_left_value := _read_sim_value(str(LEVER_TICKS_LEFT_KEYS.get(lever_id)))
-		var ticks_left := int(ticks_left_value) if ticks_left_value != null else 0
-		if ticks_left > 0:
-			status_text = "ACTIVE (%dh LEFT)" % ticks_left
+	elif LEVER_HOURS_LEFT_KEYS.has(lever_id):
+		var hours_left_value: Variant = _read_sim_value(str(LEVER_HOURS_LEFT_KEYS.get(lever_id)))
+		var hours_left: int = _variant_to_int(hours_left_value)
+		if hours_left > 0:
+			status_text = "ACTIVE (%dh LEFT)" % hours_left
 			status_color = COLOR_SCARCITY
 			if lever_id == LEVER_RATION_HARDENING:
 				ration_active = true
@@ -610,6 +632,20 @@ func _apply_chip_style(chip: PanelContainer, color: Color) -> void:
 	style.content_margin_top = 2
 	style.content_margin_bottom = 2
 	chip.add_theme_stylebox_override("panel", style)
+
+func _cleanup_sim_bridge() -> void:
+	if _sim_bridge == null:
+		return
+	if not _sim_bridge.is_queued_for_deletion():
+		_sim_bridge.queue_free()
+	_sim_bridge = null
+
+func _exit_tree() -> void:
+	if _ration_pulse_tween != null:
+		if _ration_pulse_tween.is_running():
+			_ration_pulse_tween.kill()
+		_ration_pulse_tween = null
+	_cleanup_sim_bridge()
 
 func _result_label_for(lever_id: String) -> Label:
 	match lever_id:
@@ -745,7 +781,7 @@ func _apply_ration_hardening() -> void:
 		return
 	var payload: Dictionary = {
 		"mode": ration_mode.get_item_text(ration_mode.selected),
-		"duration_hours": int(ration_duration.value),
+		"duration_hours": _variant_to_int(ration_duration.value),
 	}
 	_set_result(ration_result, _apply_lever(LEVER_RATION_HARDENING, payload), LEVER_RATION_HARDENING)
 
@@ -753,8 +789,8 @@ func _apply_labor_overdrive() -> void:
 	if not _input_controls_ready:
 		return
 	var payload: Dictionary = {
-		"intensity": int(labor_intensity.value),
-		"duration_hours": int(labor_duration.value),
+		"intensity": _variant_to_int(labor_intensity.value),
+		"duration_hours": _variant_to_int(labor_duration.value),
 	}
 	_set_result(labor_result, _apply_lever(LEVER_LABOR_OVERDRIVE, payload), LEVER_LABOR_OVERDRIVE)
 
@@ -762,8 +798,8 @@ func _apply_expedition_compression() -> void:
 	if not _input_controls_ready:
 		return
 	var payload: Dictionary = {
-		"intensity": int(expedition_intensity.value),
-		"duration_hours": int(expedition_duration.value),
+		"intensity": _variant_to_int(expedition_intensity.value),
+		"duration_hours": _variant_to_int(expedition_duration.value),
 	}
 	_set_result(expedition_result, _apply_lever(LEVER_EXPEDITION_COMPRESSION, payload), LEVER_EXPEDITION_COMPRESSION)
 
@@ -771,8 +807,8 @@ func _apply_information_throttling() -> void:
 	if not _input_controls_ready:
 		return
 	var payload: Dictionary = {
-		"level": int(info_level.value),
-		"duration_hours": int(info_duration.value),
+		"level": _variant_to_int(info_level.value),
+		"duration_hours": _variant_to_int(info_duration.value),
 	}
 	_set_result(info_result, _apply_lever(LEVER_INFORMATION_THROTTLING, payload), LEVER_INFORMATION_THROTTLING)
 
@@ -790,7 +826,7 @@ func _apply_emergency_conversion() -> void:
 	var payload: Dictionary = {
 		"from": _selected_conversion_key(),
 		"to": conversion_to.get_item_text(conversion_to.selected),
-		"amount": int(conversion_amount.value),
+		"amount": _variant_to_int(conversion_amount.value),
 	}
 	_set_result(conversion_result, _apply_lever(LEVER_EMERGENCY_CONVERSION, payload), LEVER_EMERGENCY_CONVERSION)
 
@@ -806,10 +842,11 @@ func _set_result(label: Label, ok: bool, lever_id: String) -> void:
 	if ok:
 		match lever_id:
 			LEVER_RATION_HARDENING, LEVER_LABOR_OVERDRIVE, LEVER_INFORMATION_THROTTLING, LEVER_EXPEDITION_COMPRESSION:
-				if LEVER_TICKS_LEFT_KEYS.has(lever_id):
-					var ticks_left := int(_read_sim_value(str(LEVER_TICKS_LEFT_KEYS.get(lever_id))))
-					if ticks_left > 0:
-						result_text = "ACTIVE (%dh LEFT)" % ticks_left
+				if LEVER_HOURS_LEFT_KEYS.has(lever_id):
+					var hours_left_value: Variant = _read_sim_value(str(LEVER_HOURS_LEFT_KEYS.get(lever_id)))
+					var hours_left: int = _variant_to_int(hours_left_value)
+					if hours_left > 0:
+						result_text = "ACTIVE (%dh LEFT)" % hours_left
 			LEVER_MODULE_ABANDONMENT:
 				result_text = "DISABLED"
 			LEVER_EMERGENCY_CONVERSION:

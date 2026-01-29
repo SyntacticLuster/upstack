@@ -45,9 +45,9 @@ const MODULE_DELTA_KEYS: Array[String] = [
 
 class SimCommand extends RefCounted:
 	var type: String = ""
-	var payload: Dictionary = null
+	var payload: Dictionary
 
-	func _init(_type: String = "", _payload: Dictionary = null) -> void:
+	func _init(_type: String = "", _payload: Variant = null) -> void:
 		type = _type
 		payload = _duplicate_payload(_payload)
 
@@ -57,7 +57,7 @@ class SimCommand extends RefCounted:
 		copy.payload = _duplicate_payload(payload)
 		return copy
 
-	func _duplicate_payload(value: Dictionary) -> Dictionary:
+	func _duplicate_payload(value: Variant) -> Dictionary:
 		if value == null:
 			return {}
 		if value is Dictionary:
@@ -164,18 +164,34 @@ var _delayed_insertion_counter: int = 0
 
 # Lever state (persistent)
 var ration_hardening_ticks_left: int = 0
+var ration_hardening_start_hour_index: int = -1
+var ration_hardening_duration_hours: int = 0
+var ration_hardening_end_hour_index: int = -1
+var ration_hardening_hours_left: int = 0
 var ration_hardening_mode: String = ""
 var ration_scar: float = 0.0
 
 var labor_overdrive_ticks_left: int = 0
+var labor_overdrive_start_hour_index: int = -1
+var labor_overdrive_duration_hours: int = 0
+var labor_overdrive_end_hour_index: int = -1
+var labor_overdrive_hours_left: int = 0
 var labor_overdrive_intensity: int = 0
 var labor_scar: float = 0.0
 
 var expedition_compression_ticks_left: int = 0
+var expedition_compression_start_hour_index: int = -1
+var expedition_compression_duration_hours: int = 0
+var expedition_compression_end_hour_index: int = -1
+var expedition_compression_hours_left: int = 0
 var expedition_compression_intensity: int = 0
 var expedition_attention: float = 0.0
 
 var info_throttle_ticks_left: int = 0
+var info_throttle_start_hour_index: int = -1
+var info_throttle_duration_hours: int = 0
+var info_throttle_end_hour_index: int = -1
+var info_throttle_hours_left: int = 0
 var info_throttle_level: int = 0
 var info_throttle_backlog: float = 0.0
 
@@ -206,8 +222,9 @@ func _step_day() -> void:
 func _advance_hour() -> void:
 	hour_index += 1
 	hour_of_day = int(hour_index % HOURS_PER_DAY)
-	day = hour_index // HOURS_PER_DAY
+	day = int(hour_index / HOURS_PER_DAY)
 	phase = "HOUR_TICK"
+	_update_lever_hourly_states()
 	if hour_of_day == 0:
 		var incidents := _step_day_core(day, sim_seed, tower, res, db)
 		print(_format_log_line(day, sim_seed, res, incidents, _last_obs_tokens))
@@ -276,21 +293,38 @@ func _reset_policies_and_pools() -> void:
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
 	ration_hardening_ticks_left = 0
+	ration_hardening_start_hour_index = -1
+	ration_hardening_duration_hours = 0
+	ration_hardening_end_hour_index = -1
+	ration_hardening_hours_left = 0
 	ration_hardening_mode = ""
 	ration_scar = 0.0
 	labor_overdrive_ticks_left = 0
+	labor_overdrive_start_hour_index = -1
+	labor_overdrive_duration_hours = 0
+	labor_overdrive_end_hour_index = -1
+	labor_overdrive_hours_left = 0
 	labor_overdrive_intensity = 0
 	labor_scar = 0.0
 	expedition_compression_ticks_left = 0
+	expedition_compression_start_hour_index = -1
+	expedition_compression_duration_hours = 0
+	expedition_compression_end_hour_index = -1
+	expedition_compression_hours_left = 0
 	expedition_compression_intensity = 0
 	expedition_attention = 0.0
 	info_throttle_ticks_left = 0
+	info_throttle_start_hour_index = -1
+	info_throttle_duration_hours = 0
+	info_throttle_end_hour_index = -1
+	info_throttle_hours_left = 0
 	info_throttle_level = 0
 	info_throttle_backlog = 0.0
 	abandoned_modules.clear()
 	conversion_scar = 0
 	conversion_burn_counts.clear()
 	pending_conversions.clear()
+	_update_lever_hourly_states()
 
 func enqueue_command(cmd: SimCommand) -> void:
 	if cmd == null:
@@ -300,7 +334,7 @@ func enqueue_command(cmd: SimCommand) -> void:
 func clear_commands() -> void:
 	_command_queue.clear()
 
-func _duration_payload_ticks(payload: Dictionary) -> int:
+func _duration_payload_hours(payload: Dictionary) -> int:
 	if payload == null:
 		return 0
 	if payload.has("duration_ticks"):
@@ -323,6 +357,47 @@ func _duration_payload_summary(payload: Dictionary) -> Dictionary:
 		summary["duration_ticks"] = int(payload.get("duration_ticks", 0))
 	return summary
 
+func _duration_metadata(duration_hours: int) -> Dictionary:
+	var start_hour := hour_index
+	return {
+		"start_hour_index": start_hour,
+		"duration_hours": duration_hours,
+		"end_hour_index": start_hour + duration_hours,
+		"hours_left": duration_hours,
+	}
+
+func _lever_hours_left(start_hour_index: int, duration_hours: int) -> int:
+	if start_hour_index < 0 or duration_hours <= 0:
+		return 0
+	var end_hour_index := start_hour_index + duration_hours
+	return max(end_hour_index - hour_index, 0)
+
+func _update_lever_hourly_states() -> void:
+	if ration_hardening_duration_hours <= 0 and ration_hardening_ticks_left > 0:
+		ration_hardening_start_hour_index = hour_index
+		ration_hardening_duration_hours = ration_hardening_ticks_left
+		ration_hardening_end_hour_index = ration_hardening_start_hour_index + ration_hardening_duration_hours
+	if labor_overdrive_duration_hours <= 0 and labor_overdrive_ticks_left > 0:
+		labor_overdrive_start_hour_index = hour_index
+		labor_overdrive_duration_hours = labor_overdrive_ticks_left
+		labor_overdrive_end_hour_index = labor_overdrive_start_hour_index + labor_overdrive_duration_hours
+	if expedition_compression_duration_hours <= 0 and expedition_compression_ticks_left > 0:
+		expedition_compression_start_hour_index = hour_index
+		expedition_compression_duration_hours = expedition_compression_ticks_left
+		expedition_compression_end_hour_index = expedition_compression_start_hour_index + expedition_compression_duration_hours
+	if info_throttle_duration_hours <= 0 and info_throttle_ticks_left > 0:
+		info_throttle_start_hour_index = hour_index
+		info_throttle_duration_hours = info_throttle_ticks_left
+		info_throttle_end_hour_index = info_throttle_start_hour_index + info_throttle_duration_hours
+	ration_hardening_hours_left = _lever_hours_left(ration_hardening_start_hour_index, ration_hardening_duration_hours)
+	ration_hardening_ticks_left = ration_hardening_hours_left
+	labor_overdrive_hours_left = _lever_hours_left(labor_overdrive_start_hour_index, labor_overdrive_duration_hours)
+	labor_overdrive_ticks_left = labor_overdrive_hours_left
+	expedition_compression_hours_left = _lever_hours_left(expedition_compression_start_hour_index, expedition_compression_duration_hours)
+	expedition_compression_ticks_left = expedition_compression_hours_left
+	info_throttle_hours_left = _lever_hours_left(info_throttle_start_hour_index, info_throttle_duration_hours)
+	info_throttle_ticks_left = info_throttle_hours_left
+
 func _dict_merge_into(dst: Dictionary, src: Dictionary) -> void:
 	if dst == null or src == null:
 		return
@@ -338,16 +413,21 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	match lever_id:
 		LEVER_RATION_HARDENING:
 			var mode: String = str(payload.get("mode", ""))
-			var duration_ticks := _duration_payload_ticks(payload)
+			var duration_hours := _duration_payload_hours(payload)
 			if mode != "soft" and mode != "hard":
 				immediate_summary = "REJECTED: invalid mode"
-			elif duration_ticks <= 0:
+			elif duration_hours <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				ration_hardening_mode = mode
-				ration_hardening_ticks_left = duration_ticks
 				var duration_info: Dictionary = _duration_payload_summary(payload)
-				duration_info["duration_ticks"] = duration_ticks
+				duration_info["duration_hours"] = duration_hours
+				duration_info["duration_ticks"] = duration_hours
+				var duration_metadata: Dictionary = _duration_metadata(duration_hours)
+				ration_hardening_start_hour_index = int(duration_metadata.get("start_hour_index", -1))
+				ration_hardening_duration_hours = int(duration_metadata.get("duration_hours", 0))
+				ration_hardening_end_hour_index = int(duration_metadata.get("end_hour_index", -1))
+				_dict_merge_into(duration_info, duration_metadata)
 				sanitized = {"mode": mode}
 				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "policy active"
@@ -355,17 +435,22 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 				ok = true
 		LEVER_LABOR_OVERDRIVE:
 			var intensity: int = int(payload.get("intensity", 0))
-			var duration_ticks := _duration_payload_ticks(payload)
+			var duration_hours := _duration_payload_hours(payload)
 			if intensity <= 0:
 				immediate_summary = "REJECTED: invalid intensity"
-			elif duration_ticks <= 0:
+			elif duration_hours <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				intensity = int(clamp(intensity, 1, LABOR_OVERDRIVE_MAX_INTENSITY))
 				labor_overdrive_intensity = intensity
-				labor_overdrive_ticks_left = duration_ticks
 				var duration_info: Dictionary = _duration_payload_summary(payload)
-				duration_info["duration_ticks"] = duration_ticks
+				duration_info["duration_hours"] = duration_hours
+				duration_info["duration_ticks"] = duration_hours
+				var duration_metadata: Dictionary = _duration_metadata(duration_hours)
+				labor_overdrive_start_hour_index = int(duration_metadata.get("start_hour_index", -1))
+				labor_overdrive_duration_hours = int(duration_metadata.get("duration_hours", 0))
+				labor_overdrive_end_hour_index = int(duration_metadata.get("end_hour_index", -1))
+				_dict_merge_into(duration_info, duration_metadata)
 				sanitized = {"intensity": intensity}
 				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "throughput boosted"
@@ -373,17 +458,22 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 				ok = true
 		LEVER_EXPEDITION_COMPRESSION:
 			var intensity: int = int(payload.get("intensity", 0))
-			var duration_ticks := _duration_payload_ticks(payload)
+			var duration_hours := _duration_payload_hours(payload)
 			if intensity <= 0:
 				immediate_summary = "REJECTED: invalid intensity"
-			elif duration_ticks <= 0:
+			elif duration_hours <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				intensity = int(clamp(intensity, 1, EXPEDITION_COMPRESSION_MAX_INTENSITY))
 				expedition_compression_intensity = intensity
-				expedition_compression_ticks_left = duration_ticks
 				var duration_info: Dictionary = _duration_payload_summary(payload)
-				duration_info["duration_ticks"] = duration_ticks
+				duration_info["duration_hours"] = duration_hours
+				duration_info["duration_ticks"] = duration_hours
+				var duration_metadata: Dictionary = _duration_metadata(duration_hours)
+				expedition_compression_start_hour_index = int(duration_metadata.get("start_hour_index", -1))
+				expedition_compression_duration_hours = int(duration_metadata.get("duration_hours", 0))
+				expedition_compression_end_hour_index = int(duration_metadata.get("end_hour_index", -1))
+				_dict_merge_into(duration_info, duration_metadata)
 				sanitized = {"intensity": intensity}
 				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "expedition tempo compressed"
@@ -391,17 +481,22 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 				ok = true
 		LEVER_INFORMATION_THROTTLING:
 			var level: int = int(payload.get("level", 0))
-			var duration_ticks := _duration_payload_ticks(payload)
+			var duration_hours := _duration_payload_hours(payload)
 			if level <= 0:
 				immediate_summary = "REJECTED: invalid level"
-			elif duration_ticks <= 0:
+			elif duration_hours <= 0:
 				immediate_summary = "REJECTED: invalid duration"
 			else:
 				level = int(clamp(level, 1, INFO_THROTTLE_MAX_LEVEL))
 				info_throttle_level = level
-				info_throttle_ticks_left = duration_ticks
 				var duration_info: Dictionary = _duration_payload_summary(payload)
-				duration_info["duration_ticks"] = duration_ticks
+				duration_info["duration_hours"] = duration_hours
+				duration_info["duration_ticks"] = duration_hours
+				var duration_metadata: Dictionary = _duration_metadata(duration_hours)
+				info_throttle_start_hour_index = int(duration_metadata.get("start_hour_index", -1))
+				info_throttle_duration_hours = int(duration_metadata.get("duration_hours", 0))
+				info_throttle_end_hour_index = int(duration_metadata.get("end_hour_index", -1))
+				_dict_merge_into(duration_info, duration_metadata)
 				sanitized = {"level": level}
 				_dict_merge_into(sanitized, duration_info)
 				immediate_summary = "instability dampened"
@@ -451,6 +546,8 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 		_:
 			immediate_summary = "REJECTED: unknown lever"
 
+	if ok:
+		_update_lever_hourly_states()
 	_log_lever_event(day, lever_id, sanitized, immediate_summary, debts_summary)
 	return ok
 
@@ -476,7 +573,7 @@ func _module_key(f: int, x: int, y: int) -> String:
 func _parse_module_instance_id(instance_id: String) -> Dictionary:
 	if instance_id == "":
 		return {}
-	var parts: Array[String] = instance_id.split(":")
+	var parts: PackedStringArray = instance_id.split(":")
 	if parts.size() != 3:
 		return {}
 	return {"f": int(parts[0]), "x": int(parts[1]), "y": int(parts[2])}
@@ -638,6 +735,7 @@ func _start_expedition_day() -> void:
 
 func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Array[String]) -> void:
 	# Phase -1: levers (policy effects + queued conversions)
+	_update_lever_hourly_states()
 	ration_consumption_multiplier_today = 1.0
 	ration_recovery_multiplier_today = 1.0
 	labor_output_multiplier_today = 1.0
@@ -648,10 +746,10 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 	info_misalloc_multiplier_today = 1.0
 	lever_threat_bonus_today = 0
 
-	var ration_active_today := ration_hardening_ticks_left > 0
-	var labor_active_today := labor_overdrive_ticks_left > 0
-	var expedition_active_today := expedition_compression_ticks_left > 0
-	var info_active_today := info_throttle_ticks_left > 0
+	var ration_active_today := ration_hardening_hours_left > 0
+	var labor_active_today := labor_overdrive_hours_left > 0
+	var expedition_active_today := expedition_compression_hours_left > 0
+	var info_active_today := info_throttle_hours_left > 0
 	var conversions_processed_today := false
 
 	if not abandoned_modules.is_empty():
@@ -659,7 +757,7 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		# NOTE: abandoned_modules MUST NOT be mutated during iteration.
 		keys.sort()
 		for key in keys:
-			var parts: Array[String] = str(key).split(":")
+			var parts: PackedStringArray = str(key).split(":")
 			if parts.size() != 3:
 				continue
 			var f: int = int(parts[0])
@@ -676,12 +774,15 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		var scar_gain := RATION_SCAR_PER_DAY_HARD if hard else RATION_SCAR_PER_DAY_SOFT
 		ration_scar += scar_gain
 		ration_scar = snapped(ration_scar, SIM_FLOAT_SNAP)
-		ration_hardening_ticks_left = max(ration_hardening_ticks_left - 1, 0)
 		_obs_push(obs, "LEVER_RATION@%s" % ration_hardening_mode)
 		_log_lever_event(
 			sim_day,
 			LEVER_RATION_HARDENING,
-			{"mode": ration_hardening_mode, "ticks_left": ration_hardening_ticks_left},
+			{
+				"mode": ration_hardening_mode,
+				"hours_left": ration_hardening_hours_left,
+				"ticks_left": ration_hardening_hours_left,
+			},
 			"consumption x%0.2f" % multiplier,
 			"scar=%.2f" % ration_scar
 		)
@@ -707,12 +808,16 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		labor_output_multiplier_today = 1.0 + (float(intensity) * LABOR_OVERDRIVE_MULT_PER_LEVEL)
 		labor_scar += float(intensity) * LABOR_SCAR_PER_DAY
 		labor_scar = snapped(labor_scar, SIM_FLOAT_SNAP)
-		labor_overdrive_ticks_left = max(labor_overdrive_ticks_left - 1, 0)
+		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_LABOR@%d" % intensity)
 		_log_lever_event(
 			sim_day,
 			LEVER_LABOR_OVERDRIVE,
-			{"intensity": intensity, "ticks_left": labor_overdrive_ticks_left},
+			{
+				"intensity": intensity,
+				"hours_left": labor_overdrive_hours_left,
+				"ticks_left": labor_overdrive_hours_left,
+			},
 			"output x%0.2f" % labor_output_multiplier_today,
 			"scar=%.2f" % labor_scar
 		)
@@ -739,12 +844,16 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 		expedition_attention_bonus_per_trip_today = intensity * EXPEDITION_ATTENTION_PER_TRIP
 		expedition_attention += float(intensity * EXPEDITION_ATTENTION_PER_DAY)
 		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
-		expedition_compression_ticks_left = max(expedition_compression_ticks_left - 1, 0)
+		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_EXPEDITION@%d" % intensity)
 		_log_lever_event(
 			sim_day,
 			LEVER_EXPEDITION_COMPRESSION,
-			{"intensity": intensity, "ticks_left": expedition_compression_ticks_left},
+			{
+				"intensity": intensity,
+				"hours_left": expedition_compression_hours_left,
+				"ticks_left": expedition_compression_hours_left,
+			},
 			"yield bonus per crew=%d" % expedition_yield_bonus_per_crew_today,
 			"attention=%.1f" % expedition_attention
 		)
@@ -775,12 +884,16 @@ func _phase_levers(sim_day: int, sim_tower: Tower, sim_res: Resources, obs: Arra
 			INFO_THROTTLE_MISALLOC_MIN,
 			1.0
 		)
-		info_throttle_ticks_left = max(info_throttle_ticks_left - 1, 0)
+		# Hourly countdown is derived from hour_index; no manual decrement needed.
 		_obs_push(obs, "LEVER_INFO@%d" % level)
 		_log_lever_event(
 			sim_day,
 			LEVER_INFORMATION_THROTTLING,
-			{"level": level, "ticks_left": info_throttle_ticks_left},
+			{
+				"level": level,
+				"hours_left": info_throttle_hours_left,
+				"ticks_left": info_throttle_hours_left,
+			},
 			"morale damp x%0.2f" % info_throttle_morale_factor_today,
 			"backlog=%0.2f" % info_throttle_backlog
 		)
@@ -1191,7 +1304,7 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 
 				var inst := ModuleInstance.new(def)
 				inst.order_index = order_index
-				inst.floor = f
+				inst.floor_index = f
 				inst.x = x
 				inst.y = y
 				var prio_override: Variant = sim_tower.get_module_priority_override(f, x, y)
@@ -1210,8 +1323,8 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 			return a.def.id < b.def.id
 		if a.def.name != b.def.name:
 			return a.def.name < b.def.name
-		if a.floor != b.floor:
-			return a.floor < b.floor
+		if a.floor_index != b.floor_index:
+			return a.floor_index < b.floor_index
 		if a.y != b.y:
 			return a.y < b.y
 		if a.x != b.x:
@@ -1388,7 +1501,7 @@ func _emit_observations(pre_threat: int, sim_res: Resources, obs: Array[String])
 	# Phase G: emit observations (tokens derived from transitions)
 	var threshold_logs := _evaluate_threat_thresholds(pre_threat, sim_res.threat)
 	for marker in threshold_logs:
-		var parts: Array[String] = str(marker).split("@")
+		var parts: PackedStringArray = str(marker).split("@")
 		if parts.size() == 2:
 			_obs_push(obs, "THR_CROSSED@%s" % parts[1])
 
