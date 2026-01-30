@@ -35,6 +35,7 @@ const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 @onready var alerts_drawer: PanelContainer = $Root/AlertsDrawer
 @onready var alerts_items: VBoxContainer = $Root/AlertsDrawer/AlertsRoot/AlertsScroll/AlertsItems
 @onready var alerts_close: Button = $Root/AlertsDrawer/AlertsRoot/AlertsHeader/AlertsClose
+@onready var overdrive_status_label: Label = $Root/TopBarPanel/TopBar/AlertsGroup/OverdriveStatus
 @onready var pause_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/PauseButton
 @onready var half_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/HalfButton
 @onready var one_button: Button = $Root/TopBarPanel/TopBar/TimeControlsRow/OneButton
@@ -105,6 +106,7 @@ func refresh() -> void:
 	_day_phase_time()
 	_update_stats()
 	_refresh_alerts()
+	_refresh_overdrive_status()
 
 func set_time_controls_vertical(use_column: bool) -> void:
 	if use_column:
@@ -332,6 +334,8 @@ func _set_disconnected() -> void:
 			_apply_indicator_state(indicator_label, "neutral")
 		entry.last_display = ""
 		entry.last_numeric = NAN
+	if overdrive_status_label != null:
+		overdrive_status_label.text = "Overdrive: N/A"
 
 func _refresh_alerts() -> void:
 	if _sim_bridge == null or not _sim_bridge.has_sim():
@@ -353,6 +357,20 @@ func _refresh_alerts() -> void:
 			alert_entries.append(entry)
 	_rebuild_alert_items(alert_entries)
 	_update_alert_count(alert_entries)
+
+func _refresh_overdrive_status() -> void:
+	if overdrive_status_label == null:
+		return
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		overdrive_status_label.text = "Overdrive: N/A"
+		return
+	var intensity: int = _variant_to_int(_read_sim_value("labor_overdrive_intensity"))
+	var hours_left: int = _variant_to_int(_read_sim_value("labor_overdrive_hours_left"))
+	if hours_left > 0 and intensity > 0:
+		var percent: int = intensity * 25
+		overdrive_status_label.text = "Overdrive L%d (+%d%%)" % [intensity, percent]
+	else:
+		overdrive_status_label.text = "Overdrive inactive"
 
 func _rebuild_alert_items(entries: Array[Dictionary]) -> void:
 	_clear_alert_items()
@@ -588,3 +606,21 @@ func _read_path(path: Array) -> Variant:
 		else:
 			return null
 	return current
+
+func _read_sim_value(key: String) -> Variant:
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		return null
+	var sim := _sim_bridge.get_sim()
+	if sim == null:
+		return null
+	return sim.get(key)
+
+func _variant_to_int(value: Variant) -> int:
+	if value == null:
+		return 0
+	match typeof(value):
+		TYPE_INT:
+			return int(value)
+		TYPE_FLOAT:
+			return int(value)
+	return 0

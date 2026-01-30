@@ -92,7 +92,7 @@ const INPUT_CONFIG := {
 	"SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/IntensityRow/Intensity": {
 		"label_path": "SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/IntensityRow/IntensityLabel",
 		"label": "INTENSITY",
-		"description": "Output multiplier per level: +15%. Higher intensity accelerates labor scar accumulation.",
+		"description": "Output multiplier per level: +25%. Higher intensity accelerates labor scar accumulation.",
 		"payload_key": "intensity",
 	},
 	"SectionPressure/PressureContent/LaborOverdrive/CardRoot/Inputs/DurationRow/Duration": {
@@ -543,7 +543,8 @@ func _refresh_conversion_options() -> void:
 	if _sim_bridge == null or not _sim_bridge.has_sim() or conversion_from == null:
 		return
 	var sim := _sim_bridge.get_sim()
-	var burns: Dictionary = sim.get("conversion_burn_counts") if sim != null else {}
+	var burns_variant: Variant = sim.get("conversion_burn_counts") if sim != null else null
+	var burns: Dictionary = burns_variant if burns_variant is Dictionary else {}
 	var previously_selected := _selected_conversion_key()
 	conversion_from.clear()
 	for key in RESOURCE_OPTIONS:
@@ -639,7 +640,12 @@ func _apply_lever_status(lever_id: String) -> void:
 		var hours_left_value: Variant = _read_sim_value(str(LEVER_HOURS_LEFT_KEYS.get(lever_id)))
 		var hours_left: int = _variant_to_int(hours_left_value)
 		if hours_left > 0:
-			status_text = "ACTIVE (%dh LEFT)" % hours_left
+			if lever_id == LEVER_LABOR_OVERDRIVE:
+				var intensity := _variant_to_int(_read_sim_value("labor_overdrive_intensity"))
+				var boost_pct := intensity * 25
+				status_text = "L%d (+%d%%) · %dh left" % [intensity, boost_pct, hours_left]
+			else:
+				status_text = "ACTIVE (%dh LEFT)" % hours_left
 			status_color = COLOR_SCARCITY
 			if lever_id == LEVER_RATION_HARDENING:
 				ration_active = true

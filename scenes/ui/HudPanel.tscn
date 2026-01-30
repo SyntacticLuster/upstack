@@ -76,6 +76,11 @@ text = "ALERTS:"
 
 [node name="AlertsValue" type="Label" parent="Root/TopBarPanel/TopBar/AlertsGroup"]
 text = "0"
+size_flags_horizontal = 1
+
+[node name="OverdriveStatus" type="Label" parent="Root/TopBarPanel/TopBar/AlertsGroup"]
+text = "Overdrive: N/A"
+size_flags_horizontal = 1
 
 [node name="AlertsDrawer" type="PanelContainer" parent="Root"]
 visible = false

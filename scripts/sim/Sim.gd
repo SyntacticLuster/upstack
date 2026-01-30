@@ -168,12 +168,16 @@ const RATION_SCAR_RECOVERY_MULT := 0.05
 const RATION_RECOVERY_MIN_MULT := 0.5
 const RATION_SCAR_CEILING_PENALTY := 0.1
 
-const LABOR_OVERDRIVE_MULT_PER_LEVEL := 0.15
+const LABOR_OVERDRIVE_MULT_PER_LEVEL := 0.25
 const LABOR_OVERDRIVE_MAX_INTENSITY := 5
 const LABOR_SCAR_PER_DAY := 0.2
 const LABOR_SCAR_EFFICIENCY_MULT := 0.05
 const LABOR_EFFICIENCY_MIN := 0.6
 const LABOR_SCAR_THREAT_MULT := 0.2
+const LABOR_OVERDRIVE_REASON_LABELS := {
+	"power": "power shortfall",
+	"inputs": "missing inputs",
+}
 
 const EXPEDITION_COMPRESSION_YIELD_PER_CREW := 1
 const EXPEDITION_COMPRESSION_MAX_INTENSITY := 5
@@ -1480,7 +1484,7 @@ func _apply_lever_output_modifiers(deltas: Dictionary) -> Dictionary:
 			var multiplier := labor_output_multiplier_today * info_misalloc_multiplier_today
 			if key == "food" or key == "water":
 				multiplier *= ration_recovery_multiplier_today
-			value = int(floor(float(value) * multiplier))
+			value = int(ceil(float(value) * multiplier))
 		adjusted[key] = value
 	return adjusted
 
@@ -2264,6 +2268,12 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 	var food_consumption := _daily_food_consumed
 	var water_consumption := _daily_water_consumed
 
+	var overdrive_base_totals: Dictionary = {
+		"food": 0,
+		"water": 0,
+	}
+	var overdrive_limit_reasons: Array[String] = []
+
 	var instances: Array[ModuleInstance] = []
 	var order_index: int = 0
 	var total_capacity: int = 0
@@ -2354,6 +2364,7 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 			powered_count += 1
 			_consume_module_inputs(sim_res, def.inputs_per_day)
 			var deltas := inst.compute_resource_deltas(sim_res)
+			_accumulate_labor_overdrive_base(deltas, overdrive_base_totals)
 			var lever_adjusted := _apply_lever_output_modifiers(deltas)
 			var scaled := _scale_deltas_for_workforce(lever_adjusted, workforce_multiplier_today)
 			if scaled.has("food"):
@@ -2367,10 +2378,20 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 		else:
 			inst.powered = false
 			inst.power_allocated = 0
+			var reduction_reason := ""
 			if candidate_power_enabled and not inputs_ready:
 				_obs_push(obs, "MODULE_INPUT_STARVED@%s" % module_key)
+				reduction_reason = "inputs"
 			else:
 				_obs_push(obs, "MODULE_UNPOWERED@%s" % module_key)
+				reduction_reason = "power"
+			if (
+				reduction_reason != ""
+				and labor_overdrive_hours_left > 0
+				and labor_overdrive_intensity > 0
+				and not overdrive_limit_reasons.has(reduction_reason)
+			):
+				overdrive_limit_reasons.append(reduction_reason)
 
 		module_power_map[module_key] = snapshot_entry
 
@@ -2401,6 +2422,8 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 			status,
 		])
 
+	_log_labor_overdrive_effects(overdrive_base_totals, overdrive_limit_reasons)
+
 	return {
 		"powered_count": powered_count,
 		"module_count": module_count,
@@ -2408,6 +2431,68 @@ func _phase_production(sim_tower: Tower, sim_res: Resources, sim_db: ModuleDB, o
 		"total_noise": total_noise,
 		"total_heat": total_heat,
 	}
+
+func _accumulate_labor_overdrive_base(deltas: Dictionary, totals: Dictionary) -> void:
+	if deltas == null or totals == null:
+		return
+	if labor_overdrive_intensity <= 0 or labor_overdrive_hours_left <= 0:
+		return
+	var base_food := int(deltas.get("food", 0))
+	if base_food > 0:
+		totals["food"] = int(totals.get("food", 0)) + base_food
+	var base_water := int(deltas.get("water", 0))
+	if base_water > 0:
+		totals["water"] = int(totals.get("water", 0)) + base_water
+
+func _log_labor_overdrive_effects(base_totals: Dictionary, reduction_reasons: Array[String]) -> void:
+	if base_totals == null:
+		return
+	var intensity := labor_overdrive_intensity
+	if intensity <= 0:
+		return
+	var multiplier := _labor_overdrive_multiplier()
+	if multiplier <= 1.0:
+		return
+	var reason_suffix := _overdrive_reason_suffix(reduction_reasons)
+	for resource in ["food", "water"]:
+		var base_amount := int(base_totals.get(resource, 0))
+		if base_amount <= 0:
+			continue
+		var boosted := int(ceil(float(base_amount) * multiplier))
+		var label: String = resource.capitalize()
+		var message := "OVERDRIVE L%d: %s base %d -> %d (+25%/level)" % [intensity, label, base_amount, boosted]
+		if reason_suffix != "":
+			message += reason_suffix
+		_emit_event(
+			"OVERDRIVE_BOOST_%s" % resource.to_upper(),
+			message,
+			"player_feed",
+			"player_feed",
+			{},
+			"production",
+			day,
+			hour_of_day,
+			true
+		)
+
+func _labor_overdrive_multiplier() -> float:
+	if labor_overdrive_intensity <= 0:
+		return 1.0
+	return 1.0 + float(labor_overdrive_intensity) * LABOR_OVERDRIVE_MULT_PER_LEVEL
+
+func _overdrive_reason_suffix(reasons: Array[String]) -> String:
+	if reasons == null or reasons.is_empty():
+		return ""
+	var labels: Array[String] = []
+	for reason in reasons:
+		var candidate := str(LABOR_OVERDRIVE_REASON_LABELS.get(reason, ""))
+		if candidate == "":
+			continue
+		if not labels.has(candidate):
+			labels.append(candidate)
+	if labels.is_empty():
+		return ""
+	return " (limited by %s)" % ", ".join(labels)
 
 func _phase_growth_dependency(sim_res: Resources, module_count: int, _powered_count: int, obs: Array[String]) -> Dictionary:
 	# Phase C: growth & dependency (maintenance / fragility)
