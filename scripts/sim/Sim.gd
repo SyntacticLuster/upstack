@@ -38,6 +38,7 @@ var _last_production_metrics: Dictionary = {}
 
 const IncidentDefsRef = preload("res://scripts/sim/IncidentDefs.gd")
 const LeverDefsRef = preload("res://scripts/sim/LeverDefs.gd")
+const MapDefRef = preload("res://scripts/sim/MapDef.gd")
 
 const MODULE_DELTA_KEYS: Array[String] = [
 	"food",
@@ -70,6 +71,15 @@ const RNG_OFFSET_UNREST_INCIDENT := 6
 const RNG_OFFSET_UNREST_MODULE := 7
 const RNG_OFFSET_UNREST_TERMINAL := 8
 const RNG_OFFSET_UNREST_TERMINAL_OUTCOME := 9
+const RNG_OFFSET_ACTIVE_EXPEDITION := 10
+
+# Expedition state machine states.
+const EXPEDITION_STATE_PLANNED := "PLANNED"
+const EXPEDITION_STATE_OUTBOUND := "OUTBOUND"
+const EXPEDITION_STATE_ONSITE := "ONSITE"
+const EXPEDITION_STATE_RETURNING := "RETURNING"
+const EXPEDITION_STATE_RESOLVED := "RESOLVED"
+const EXPEDITION_STATE_FAILED := "FAILED"
 
 const PRODUCTION_HOUR_MIN := 3
 const PRODUCTION_HOUR_MAX := 7
@@ -297,6 +307,11 @@ var expedition_heat: int = 0
 var expedition_commands_today: int = 0
 var expedition_happened_today: bool = false
 
+# Map and active expeditions (state machine driven).
+var map_def: MapDefRef = null
+var active_expedition: Dictionary = {}  # Single active expedition; empty if none.
+var expedition_id_counter: int = 0
+
 # Lagged consequences for expeditions (persistent, deterministic queue)
 var expedition_counter: int = 0
 var _delayed_consequence_queue: Array[Dictionary] = []
@@ -374,6 +389,7 @@ func _advance_hour() -> void:
 	_update_civil_unrest_state()
 	_update_lever_hourly_states()
 	_emit_lever_state_changes()
+	_tick_active_expedition()
 	if hour_of_day == 0:
 		_begin_day(day)
 	if hour_of_day == scheduled_production_hour and not production_executed_today:
@@ -388,6 +404,7 @@ func _setup_default_state() -> void:
 	db = ModuleDB.new()
 	res = Resources.new()
 	tower = Tower.new(6, 6)
+	map_def = MapDefRef.new()
 	_reset_policies_and_pools()
 
 	# Place a small starter layout
@@ -455,6 +472,8 @@ func _reset_policies_and_pools() -> void:
 	expedition_commands_today = 0
 	expedition_happened_today = false
 	expedition_counter = 0
+	active_expedition.clear()
+	expedition_id_counter = 0
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
 	_consequence_queue.clear()
@@ -1912,12 +1931,29 @@ func _schedule_expedition_lag(
 	_obs_push(obs, "EXPEDITION_LAG_SCHEDULED@%s@D+%d@M%d@heat=%d" % [kind, delay, magnitude, heat_at_schedule])
 
 func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: Resources, obs: Array[String]) -> void:
-	var target: String = str(payload.get("target", "materials"))
+	# Map-driven expeditions: destination_id is required.
+	var destination_id: String = str(payload.get("destination_id", ""))
+	if destination_id == "":
+		# Fallback to legacy "target" for backward compatibility during transition.
+		destination_id = str(payload.get("target", ""))
+
 	var requested_crew: int = int(payload.get("crew", 1))
 	var crew: int = int(clamp(requested_crew, 0, sim_res.population))
-	_obs_push(obs, "CMD:EXPEDITION@%s" % target)
+	_obs_push(obs, "CMD:EXPEDITION@%s" % destination_id)
+
+	# Validate destination if map_def is available.
+	if map_def != null and destination_id != "":
+		if not map_def.is_valid_destination(destination_id):
+			_obs_push(obs, "EXPEDITION_ABORT@INVALID_DESTINATION")
+			return
+
 	if crew <= 0:
 		_obs_push(obs, "EXPEDITION_ABORT@NO_CREW")
+		return
+
+	# If map-driven expedition is already active, reject.
+	if has_active_expedition():
+		_obs_push(obs, "EXPEDITION_ABORT@ALREADY_ACTIVE")
 		return
 
 	_mark_visibility_triggered()
@@ -1960,6 +1996,17 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
 		_obs_push(obs, "ATTN+%d" % expedition_attention_bonus_per_trip_today)
 
+	# If map_def is available and destination is a map location, use map-driven logic.
+	if map_def != null and map_def.is_valid_destination(destination_id):
+		var result := launch_expedition(destination_id, crew)
+		if result.get("ok", false):
+			_obs_push(obs, "MAP_EXPEDITION_LAUNCHED@%s" % destination_id)
+		else:
+			_obs_push(obs, "MAP_EXPEDITION_FAILED@%s" % str(result.get("message", "")))
+		return
+
+	# Legacy scav_pools fallback for backward compatibility.
+	var target := destination_id
 	if not scav_pools.has(target):
 		push_warning("Unknown expedition target '%s' in scav_pools; yield will be zero." % target)
 		scav_pools[target] = 0
@@ -1991,6 +2038,298 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		_:
 			# Unknown targets drain their pool but don't create new subsystems.
 			_obs_push(obs, "YIELD_UNKNOWN@%d" % yield_amount)
+
+
+# =============================================================================
+# Map-driven expedition state machine (destination required).
+# =============================================================================
+
+func has_active_expedition() -> bool:
+	return not active_expedition.is_empty()
+
+func get_active_expedition() -> Dictionary:
+	if active_expedition.is_empty():
+		return {}
+	return active_expedition.duplicate(true)
+
+func can_launch_expedition() -> bool:
+	return not has_active_expedition()
+
+func launch_expedition(destination_id: String, crew: int) -> Dictionary:
+	## Attempts to launch an expedition to destination_id with crew members.
+	## Returns {"ok": bool, "message": String, "expedition": Dictionary or null}.
+	var result := {"ok": false, "message": "", "expedition": null}
+
+	if has_active_expedition():
+		result["message"] = "Expedition already in progress."
+		return result
+
+	if map_def == null:
+		result["message"] = "Map not initialized."
+		return result
+
+	if not map_def.is_valid_destination(destination_id):
+		result["message"] = "Invalid destination: %s" % destination_id
+		return result
+
+	var location: MapDefRef.LocationDef = map_def.get_location(destination_id)
+	if location == null:
+		result["message"] = "Destination not found: %s" % destination_id
+		return result
+
+	var clamped_crew := int(clamp(crew, 1, res.population))
+	if clamped_crew <= 0:
+		result["message"] = "No crew available."
+		return result
+
+	# Create expedition.
+	expedition_id_counter += 1
+	var exp_id := expedition_id_counter
+	var total_hours := location.total_trip_hours()
+
+	active_expedition = {
+		"id": exp_id,
+		"destination_id": destination_id,
+		"destination_name": location.name,
+		"crew": clamped_crew,
+		"state": EXPEDITION_STATE_PLANNED,
+		"start_hour_index": hour_index,
+		"distance_hours": location.distance_hours,
+		"onsite_hours": location.onsite_hours,
+		"total_hours": total_hours,
+		"hours_in_state": 0,
+		"risk_level": location.risk_level,
+		"resources": location.resources.duplicate(true),
+	}
+
+	# Transition from PLANNED to OUTBOUND immediately.
+	active_expedition["state"] = EXPEDITION_STATE_OUTBOUND
+	active_expedition["hours_in_state"] = 0
+
+	# Track visibility trigger.
+	_mark_visibility_triggered()
+
+	# Emit launch event.
+	_emit_expedition_event(
+		"EXPEDITION_LAUNCHED",
+		"Expedition launched to %s with %d crew." % [location.name, clamped_crew],
+		"info",
+		active_expedition.duplicate(true)
+	)
+
+	# Apply immediate effects (crew out, threat increase).
+	expedition_crew_today += clamped_crew
+	var threat_gain := 1 + int(ceil(float(clamped_crew) * 0.5))
+	expedition_threat_today += threat_gain
+	res.threat += threat_gain
+
+	# Update expedition tracking.
+	expedition_commands_today += 1
+	expedition_count_total += 1
+	if not expedition_happened_today:
+		expedition_streak += 1
+		expedition_happened_today = true
+	_recompute_expedition_heat()
+	expedition_counter = expedition_count_total
+
+	result["ok"] = true
+	result["message"] = "Expedition launched."
+	result["expedition"] = active_expedition.duplicate(true)
+	return result
+
+func _tick_active_expedition() -> void:
+	## Called every hour tick to progress the active expedition.
+	if active_expedition.is_empty():
+		return
+
+	var state: String = str(active_expedition.get("state", ""))
+	if state == EXPEDITION_STATE_RESOLVED or state == EXPEDITION_STATE_FAILED:
+		# Clear completed expeditions.
+		active_expedition.clear()
+		return
+
+	# Increment hours in current state.
+	var hours_in_state := int(active_expedition.get("hours_in_state", 0)) + 1
+	active_expedition["hours_in_state"] = hours_in_state
+
+	# State transitions based on time.
+	match state:
+		EXPEDITION_STATE_OUTBOUND:
+			var distance_hours := int(active_expedition.get("distance_hours", 1))
+			if hours_in_state >= distance_hours:
+				_expedition_transition_to(EXPEDITION_STATE_ONSITE)
+		EXPEDITION_STATE_ONSITE:
+			var onsite_hours := int(active_expedition.get("onsite_hours", 1))
+			if hours_in_state >= onsite_hours:
+				_expedition_apply_onsite_outcome()
+				_expedition_transition_to(EXPEDITION_STATE_RETURNING)
+		EXPEDITION_STATE_RETURNING:
+			var distance_hours := int(active_expedition.get("distance_hours", 1))
+			if hours_in_state >= distance_hours:
+				_expedition_resolve()
+
+func _expedition_transition_to(new_state: String) -> void:
+	var _old_state: String = str(active_expedition.get("state", ""))
+	active_expedition["state"] = new_state
+	active_expedition["hours_in_state"] = 0
+
+	var dest_name: String = str(active_expedition.get("destination_name", "unknown"))
+
+	match new_state:
+		EXPEDITION_STATE_ONSITE:
+			_emit_expedition_event(
+				"EXPEDITION_ARRIVED",
+				"Expedition arrived at %s." % dest_name,
+				"info",
+				active_expedition.duplicate(true)
+			)
+		EXPEDITION_STATE_RETURNING:
+			_emit_expedition_event(
+				"EXPEDITION_RETURNING",
+				"Expedition returning from %s." % dest_name,
+				"info",
+				active_expedition.duplicate(true)
+			)
+
+func _expedition_apply_onsite_outcome() -> void:
+	## Apply deterministic outcomes at destination (resource yields, risks).
+	var exp_id := int(active_expedition.get("id", 0))
+	var crew := int(active_expedition.get("crew", 1))
+	var risk_level := int(active_expedition.get("risk_level", 1))
+	var _dest_id: String = str(active_expedition.get("destination_id", ""))
+
+	# Deterministic RNG for this expedition outcome.
+	var tracker := _create_rng_tracker(
+		day, PHASE_EXPEDITIONS,
+		"expedition:%d:onsite:t%d" % [exp_id, hour_index],
+		RNG_OFFSET_ACTIVE_EXPEDITION
+	)
+
+	# Calculate yields from destination resources.
+	var resources_dict: Variant = active_expedition.get("resources", {})
+	var yields: Dictionary = {}
+	if resources_dict is Dictionary:
+		var res_keys: Array = resources_dict.keys()
+		res_keys.sort()
+		for res_key in res_keys:
+			var available := int(resources_dict.get(res_key, 0))
+			if available <= 0:
+				continue
+			# Base yield: crew * 3, capped by available.
+			var base_yield := crew * 3
+			var yield_amount := int(min(base_yield, available))
+			if yield_amount > 0:
+				yields[res_key] = yield_amount
+				# Deplete from expedition's tracked resources.
+				active_expedition["resources"][res_key] = available - yield_amount
+
+	active_expedition["yields"] = yields.duplicate(true)
+
+	# Risk check: chance of failure or casualty based on risk_level.
+	var failure_roll := _rng_randf(tracker)
+	var failure_chance := float(risk_level) * 0.05  # 0%, 5%, 10%, 15% for levels 0-3.
+	if failure_roll < failure_chance:
+		# Expedition partially fails (reduced yield, possible crew loss).
+		var casualty_roll := _rng_randf(tracker)
+		if casualty_roll < 0.3 and crew > 1:
+			active_expedition["crew_lost"] = 1
+			active_expedition["crew"] = crew - 1
+			_emit_expedition_event(
+				"EXPEDITION_CASUALTY",
+				"Expedition suffered a casualty.",
+				"warn",
+				active_expedition.duplicate(true)
+			)
+		else:
+			# Reduce yields by half.
+			for key in yields.keys():
+				yields[key] = int(yields[key] / 2)
+			active_expedition["yields"] = yields.duplicate(true)
+			_emit_expedition_event(
+				"EXPEDITION_SETBACK",
+				"Expedition encountered difficulties; reduced yield.",
+				"warn",
+				active_expedition.duplicate(true)
+			)
+
+func _expedition_resolve() -> void:
+	## Finalize expedition: apply yields to resources, return crew.
+	var dest_name: String = str(active_expedition.get("destination_name", "unknown"))
+	var _dest_id: String = str(active_expedition.get("destination_id", ""))
+	var _crew := int(active_expedition.get("crew", 0))
+	var crew_lost := int(active_expedition.get("crew_lost", 0))
+	var yields: Variant = active_expedition.get("yields", {})
+
+	# Apply resource gains.
+	var yield_summary_parts: Array[String] = []
+	if yields is Dictionary:
+		var yield_keys: Array = yields.keys()
+		yield_keys.sort()
+		for key in yield_keys:
+			var amount := int(yields.get(key, 0))
+			if amount <= 0:
+				continue
+			match key:
+				"food":
+					res.food += amount
+				"water":
+					res.water += amount
+				"materials":
+					res.materials += amount
+			yield_summary_parts.append("%s +%d" % [key, amount])
+
+	# Apply population loss if any.
+	if crew_lost > 0:
+		res.population = max(res.population - crew_lost, 0)
+
+	# Mark as resolved.
+	active_expedition["state"] = EXPEDITION_STATE_RESOLVED
+
+	var yield_summary := ", ".join(yield_summary_parts) if not yield_summary_parts.is_empty() else "nothing"
+	var message := "Expedition returned from %s. Yielded: %s." % [dest_name, yield_summary]
+	if crew_lost > 0:
+		message += " Lost %d crew." % crew_lost
+
+	_emit_expedition_event(
+		"EXPEDITION_RESOLVED",
+		message,
+		"info",
+		active_expedition.duplicate(true)
+	)
+
+	# Clamp resources.
+	res.clamp_all()
+
+	# Clear expedition in next tick.
+
+func _emit_expedition_event(event_type: String, message: String, severity: String, payload: Dictionary) -> void:
+	_emit_event(
+		event_type,
+		message,
+		severity,
+		"player_feed",
+		payload,
+		"expedition",
+		day,
+		hour_of_day,
+		true
+	)
+
+func get_map_locations() -> Array:
+	## Returns location data for UI consumption.
+	if map_def == null:
+		return []
+	var locations: Array = []
+	for loc in map_def.get_expedition_destinations():
+		locations.append(loc.to_dict())
+	return locations
+
+func get_map_edges() -> Array[Dictionary]:
+	## Returns edge data for visual map rendering.
+	if map_def == null:
+		return []
+	return map_def.get_edges()
+
 
 func _log_trade_event(sim_day: int, message: String, severity: String, payload: Dictionary) -> void:
 	_emit_event(
@@ -2971,6 +3310,12 @@ func _state_signature() -> String:
 	parts.append("ration_scar=%.2f" % snapped(ration_scar, SIM_FLOAT_SNAP))
 	parts.append("labor_scar=%.2f" % snapped(labor_scar, SIM_FLOAT_SNAP))
 	parts.append("conversion_scar=%d" % conversion_scar)
+	# Active expedition state for determinism tracking.
+	if not active_expedition.is_empty():
+		parts.append("active_exp_id=%d" % int(active_expedition.get("id", 0)))
+		parts.append("active_exp_state=%s" % str(active_expedition.get("state", "")))
+		parts.append("active_exp_dest=%s" % str(active_expedition.get("destination_id", "")))
+		parts.append("active_exp_hours=%d" % int(active_expedition.get("hours_in_state", 0)))
 	var abandoned_keys := abandoned_modules.keys()
 	abandoned_keys.sort()
 	for key in abandoned_keys:

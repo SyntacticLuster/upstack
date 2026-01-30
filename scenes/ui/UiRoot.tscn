@@ -1,10 +1,11 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/UiRoot.gd" id="1_root"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HudPanel.tscn" id="2_hud"]
 [ext_resource type="PackedScene" path="res://scenes/ui/OperationsConsole.tscn" id="3_console"]
 [ext_resource type="PackedScene" path="res://scenes/ui/LedgerPanel.tscn" id="4_ledger"]
 [ext_resource type="Theme" path="res://scenes/ui/Theme_UPSTACK.tres" id="5_theme"]
+[ext_resource type="PackedScene" path="res://scenes/ui/MapPanel.tscn" id="6_map"]
 
 [node name="UiRoot" type="CanvasLayer"]
 layer = 10
@@ -41,6 +42,10 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 
 [node name="OperationsConsole" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("3_console")]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="MapPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("6_map")]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 

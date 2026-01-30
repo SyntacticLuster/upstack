@@ -14,6 +14,7 @@ const LEDGER_MIN_HEIGHT := 225.0
 @onready var content_split: VSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit
 @onready var content_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentTabs
 @onready var console_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole
+@onready var map_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/MapPanel
 @onready var ledger_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/LedgerPanel
 @onready var toast_panel: PanelContainer = $Root/ToastLayer/ToastPanel
 @onready var toast_label: Label = $Root/ToastLayer/ToastPanel/ToastLabel
@@ -40,6 +41,7 @@ func _ready() -> void:
 	_sim = _resolve_sim()
 	hud_panel.set_sim(_sim)
 	console_panel.set_sim(_sim)
+	map_panel.set_sim(_sim)
 	ledger_panel.set_sim(_sim)
 	if _event_bridge == null:
 		_event_bridge = SimBridge.new()
@@ -92,6 +94,7 @@ func _on_game_pacing_state_changed(_multiplier: float, _paused: bool) -> void:
 func _refresh_all() -> void:
 	hud_panel.refresh()
 	console_panel.refresh()
+	map_panel.refresh()
 	ledger_panel.refresh()
 	_refresh_event_routing()
 

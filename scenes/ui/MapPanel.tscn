@@ -1,0 +1,86 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/MapPanel.gd" id="1_map"]
+[ext_resource type="Script" path="res://scripts/ui/VisualMapCanvas.gd" id="2_canvas"]
+
+[node name="MapPanel" type="PanelContainer"]
+script = ExtResource("1_map")
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_minimum_size = Vector2(300, 200)
+
+[node name="Root" type="VBoxContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Header" type="HBoxContainer" parent="Root"]
+size_flags_horizontal = 3
+
+[node name="TitleLabel" type="Label" parent="Root/Header"]
+text = "EXPEDITION MAP"
+
+[node name="HeaderSpacer" type="Control" parent="Root/Header"]
+size_flags_horizontal = 3
+
+[node name="StatusLabel" type="Label" parent="Root/Header"]
+text = "MAP: READY"
+size_flags_horizontal = 0
+
+[node name="ModeToggle" type="Button" parent="Root/Header"]
+text = "VISUAL"
+custom_minimum_size = Vector2(70, 0)
+
+[node name="ListContainer" type="ScrollContainer" parent="Root"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ListItems" type="VBoxContainer" parent="Root/ListContainer"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="VisualContainer" type="Control" parent="Root"]
+visible = false
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="VisualCanvas" type="Control" parent="Root/VisualContainer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+mouse_filter = 0
+script = ExtResource("2_canvas")
+
+[node name="LaunchPanel" type="PanelContainer" parent="Root"]
+visible = false
+size_flags_horizontal = 3
+
+[node name="LaunchContent" type="VBoxContainer" parent="Root/LaunchPanel"]
+size_flags_horizontal = 3
+
+[node name="DestLabel" type="Label" parent="Root/LaunchPanel/LaunchContent"]
+text = "Destination: --"
+
+[node name="CrewRow" type="HBoxContainer" parent="Root/LaunchPanel/LaunchContent"]
+size_flags_horizontal = 3
+
+[node name="CrewLabel" type="Label" parent="Root/LaunchPanel/LaunchContent/CrewRow"]
+text = "Crew:"
+
+[node name="CrewSpin" type="SpinBox" parent="Root/LaunchPanel/LaunchContent/CrewRow"]
+min_value = 1.0
+max_value = 10.0
+value = 2.0
+size_flags_horizontal = 3
+
+[node name="ButtonRow" type="HBoxContainer" parent="Root/LaunchPanel/LaunchContent"]
+size_flags_horizontal = 3
+
+[node name="LaunchButton" type="Button" parent="Root/LaunchPanel/LaunchContent"]
+text = "LAUNCH EXPEDITION"
+size_flags_horizontal = 3
+
+[node name="CancelButton" type="Button" parent="Root/LaunchPanel/LaunchContent"]
+text = "CANCEL"
+size_flags_horizontal = 3
