@@ -29,7 +29,6 @@ const VALUE_TWEEN_DURATION := 0.18
 const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 
 @onready var day_label: Label = $Root/TopBarPanel/TopBar/DayGroup/DayValue
-@onready var phase_label: Label = $Root/TopBarPanel/TopBar/DayGroup/PhaseValue
 @onready var time_label: Label = $Root/TopBarPanel/TopBar/DayGroup/TimeValue
 @onready var alerts_group: Control = $Root/TopBarPanel/TopBar/AlertsGroup
 @onready var alerts_value: Label = $Root/TopBarPanel/TopBar/AlertsGroup/AlertsValue
@@ -279,16 +278,11 @@ func _day_phase_time() -> void:
 		day_text = str(day_val)
 	day_label.text = "DAY: %s" % day_text
 
-	var phase_val: String = _sim_bridge.get_phase()
-	var phase_text := "N/A"
-	if _sim_bridge.has_phase_value():
-		phase_text = phase_val
-	phase_label.text = "PHASE: %s" % phase_text
-
-	var hour_text := "N/A"
+	var time_display := "N/A"
 	if _sim_bridge.has_sim():
-		hour_text = "%02d" % _sim_bridge.get_hour_of_day()
-	time_label.text = "HOUR: %s%s" % [hour_text, _pacing_suffix()]
+		var hour_value: int = _sim_bridge.get_hour_of_day()
+		time_display = "%02d:00" % hour_value
+	time_label.text = "TIME: %s%s" % [time_display, _pacing_suffix()]
 
 func _update_stats() -> void:
 	for entry in _stat_entries:
@@ -321,8 +315,7 @@ func _update_stats() -> void:
 
 func _set_disconnected() -> void:
 	day_label.text = "DAY: N/A"
-	phase_label.text = "PHASE: N/A"
-	time_label.text = "HOUR: N/A"
+	time_label.text = "TIME: N/A"
 	_set_alerts_count(0)
 	_alert_acknowledged.clear()
 	_clear_alert_items()

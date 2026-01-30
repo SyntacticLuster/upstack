@@ -30,13 +30,8 @@ custom_constants/separation = 10
 [node name="DayValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
 text = "DAY: N/A"
 size_flags_horizontal = 1
-
-[node name="PhaseValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
-text = "PHASE: N/A"
-size_flags_horizontal = 1
-
 [node name="TimeValue" type="Label" parent="Root/TopBarPanel/TopBar/DayGroup"]
-text = "HOUR: N/A"
+text = "TIME: N/A"
 size_flags_horizontal = 1
 
 [node name="LeftSpacer" type="Control" parent="Root/TopBarPanel/TopBar"]
