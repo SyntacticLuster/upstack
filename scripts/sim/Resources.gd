@@ -159,7 +159,7 @@ func summary() -> String:
 	]
 	return " ".join(parts)
 
-func format_currency(value: int) -> String:
+static func format_currency(value: int) -> String:
 	var prefix := "-" if value < 0 else ""
 	var absolute := abs(value)
 	var whole := absolute / CURRENCY_SUBUNITS_PER_OZT
