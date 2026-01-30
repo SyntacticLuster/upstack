@@ -282,7 +282,8 @@ func _day_phase_time() -> void:
 	if _sim_bridge.has_sim():
 		var hour_value: int = _sim_bridge.get_hour_of_day()
 		time_display = "%02d:00" % hour_value
-	time_label.text = "TIME: %s%s" % [time_display, _pacing_suffix()]
+	var fast_forward_suffix := _debug_fast_forward_suffix()
+	time_label.text = "TIME: %s%s%s" % [time_display, fast_forward_suffix, _pacing_suffix()]
 
 func _update_stats() -> void:
 	for entry in _stat_entries:
@@ -562,6 +563,16 @@ func _pacing_suffix() -> String:
 	if label == "":
 		return ""
 	return " (%s)" % label
+
+func _debug_fast_forward_suffix() -> String:
+	if not OS.is_debug_build():
+		return ""
+	if _game == null or not _game.has_method("get_last_hours_processed"):
+		return ""
+	var hours_processed := int(_game.get_last_hours_processed())
+	if hours_processed <= 1:
+		return ""
+	return " +%dh" % hours_processed
 
 func _read_path(path: Array) -> Variant:
 	if path.is_empty():

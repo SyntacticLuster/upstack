@@ -12,6 +12,7 @@ const BASE_SECONDS_PER_HOUR := 10.0
 var is_paused: bool = false
 var speed_index: int = 1
 var accumulator_seconds: float = 0.0
+var _last_hours_processed_frame: int = 0
 
 signal pacing_state_changed(multiplier: float, is_paused: bool)
 
@@ -38,10 +39,16 @@ func _process(delta: float) -> void:
 	accumulator_seconds += delta
 	var tick_interval := BASE_SECONDS_PER_HOUR / speed_multiplier
 	var ticks_this_frame := 0
+	var hours_processed_this_frame := 0
 	while accumulator_seconds >= tick_interval and ticks_this_frame < max_ticks_per_frame:
 		_tick_sim_hour()
 		accumulator_seconds -= tick_interval
 		ticks_this_frame += 1
+		hours_processed_this_frame += 1
+	_last_hours_processed_frame = hours_processed_this_frame
+	if OS.is_debug_build() and hours_processed_this_frame > 1:
+		var pacing_label := get_pacing_label()
+		print("TIME_FAST_FORWARD +%dh (speed=%s)" % [hours_processed_this_frame, pacing_label])
 
 func _input(event: InputEvent) -> void:
 	if not event is InputEventKey:
@@ -100,6 +107,9 @@ func get_speed_index() -> int:
 
 func _current_speed_multiplier() -> float:
 	return SPEED_MULTIPLIERS[clamp(speed_index, 0, SPEED_MULTIPLIERS.size() - 1)]
+
+func get_last_hours_processed() -> int:
+	return max(0, _last_hours_processed_frame)
 
 func _tick_sim_hour() -> void:
 	if sim == null:
