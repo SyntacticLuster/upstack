@@ -1,6 +1,10 @@
 extends RefCounted
 class_name Resources
 
+# Currency representation (troy ounces in milli-units for determinism).
+const CURRENCY_SUBUNITS_PER_OZT: int = 1000
+const CURRENCY_DISPLAY_DECIMALS: int = 3
+
 # Core survival resources
 var food: int = 20
 var water: int = 20
@@ -24,6 +28,10 @@ var strain: float = 0.0
 # People
 var population: int = 5
 
+# Currency holdings (milli-ozt internal units)
+var silver: int = 0
+var gold: int = 0
+
 # Power accounting (per-day, derived)
 var power_supply: int = 0
 var power_used: int = 0
@@ -37,6 +45,8 @@ const _RESOURCE_KEYS: Array[String] = [
 	"population",
 	"power_supply",
 	"power_used",
+	"silver",
+	"gold",
 ]
 
 var _deltas: Dictionary = {}
@@ -50,6 +60,8 @@ func clamp_all() -> void:
 	morale = clamp(morale, 0, morale_cap)
 	threat = clamp(threat, 0, 999)
 	population = max(population, 0)
+	silver = max(silver, 0)
+	gold = max(gold, 0)
 	power_supply = max(power_supply, 0)
 	power_used = max(power_used, 0)
 	collapse_debt = max(collapse_debt, 0.0)
@@ -85,6 +97,10 @@ func get_amount(key: String) -> int:
 			return power_supply
 		"power_used":
 			return power_used
+		"silver":
+			return silver
+		"gold":
+			return gold
 		_:
 			push_error("Unknown resource key in get_amount: %s" % key)
 			return 0
@@ -108,6 +124,10 @@ func set_amount(key: String, value: int) -> void:
 			power_supply = normalized
 		"power_used":
 			power_used = normalized
+		"silver":
+			silver = normalized
+		"gold":
+			gold = normalized
 		_:
 			push_error("Unknown resource key in set_amount: %s" % key)
 
@@ -126,6 +146,25 @@ func snapshot() -> String:
 	return ",".join(parts)
 
 func summary() -> String:
-	return "POP=%d FOOD=%d WATER=%d MAT=%d MOR=%d PWR=%d/%d THR=%d" % [
-		population, food, water, materials, morale, power_used, power_supply, threat
-]
+	var parts: Array[String] = [
+		"POP=%d" % population,
+		"FOOD=%d" % food,
+		"WATER=%d" % water,
+		"MAT=%d" % materials,
+		"MOR=%d" % morale,
+		"PWR=%d/%d" % [power_used, power_supply],
+		"THR=%d" % threat,
+		"SILVER=%s" % format_currency(silver),
+		"GOLD=%s" % format_currency(gold),
+	]
+	return " ".join(parts)
+
+static func format_currency(value: int) -> String:
+	var prefix := "-" if value < 0 else ""
+	var absolute = abs(value)
+	var whole = absolute / CURRENCY_SUBUNITS_PER_OZT
+	var fraction = absolute % CURRENCY_SUBUNITS_PER_OZT
+	var fraction_text := str(fraction)
+	while fraction_text.length() < CURRENCY_DISPLAY_DECIMALS:
+		fraction_text = "0" + fraction_text
+	return "%s%d.%s" % [prefix, whole, fraction_text]

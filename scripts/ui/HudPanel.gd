@@ -4,6 +4,8 @@ const STAT_DEFINITIONS: Array[Dictionary] = [
 	{"label": "Food", "path": ["res", "food"], "group": "resource"},
 	{"label": "Water", "path": ["res", "water"], "group": "resource"},
 	{"label": "Materials", "path": ["res", "materials"], "group": "resource"},
+	{"label": "Silver", "path": ["res", "silver"], "group": "currency"},
+	{"label": "Gold", "path": ["res", "gold"], "group": "currency"},
 	{"label": "Morale", "path": ["res", "morale"], "group": "status"},
 	{"label": "Threat", "path": ["res", "threat"], "group": "status"},
 	{"label": "Population", "path": ["res", "population"], "group": "status"},
@@ -13,6 +15,8 @@ const COLLAPSED_ICON_MAP := {
 	"Food": "F",
 	"Water": "W",
 	"Materials": "M",
+	"Silver": "SI",
+	"Gold": "G",
 	"Morale": "MO",
 	"Threat": "TH",
 	"Population": "POP",
@@ -25,7 +29,6 @@ const VALUE_TWEEN_DURATION := 0.18
 const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 
 @onready var day_label: Label = $Root/TopBarPanel/TopBar/DayGroup/DayValue
-@onready var phase_label: Label = $Root/TopBarPanel/TopBar/DayGroup/PhaseValue
 @onready var time_label: Label = $Root/TopBarPanel/TopBar/DayGroup/TimeValue
 @onready var alerts_group: Control = $Root/TopBarPanel/TopBar/AlertsGroup
 @onready var alerts_value: Label = $Root/TopBarPanel/TopBar/AlertsGroup/AlertsValue
@@ -275,16 +278,12 @@ func _day_phase_time() -> void:
 		day_text = str(day_val)
 	day_label.text = "DAY: %s" % day_text
 
-	var phase_val: String = _sim_bridge.get_phase()
-	var phase_text := "N/A"
-	if _sim_bridge.has_phase_value():
-		phase_text = phase_val
-	phase_label.text = "PHASE: %s" % phase_text
-
-	var hour_text := "N/A"
+	var time_display := "N/A"
 	if _sim_bridge.has_sim():
-		hour_text = "%02d" % _sim_bridge.get_hour_of_day()
-	time_label.text = "HOUR: %s%s" % [hour_text, _pacing_suffix()]
+		var hour_value: int = _sim_bridge.get_hour_of_day()
+		time_display = "%02d:00" % hour_value
+	var fast_forward_suffix := _debug_fast_forward_suffix()
+	time_label.text = "TIME: %s%s%s" % [time_display, fast_forward_suffix, _pacing_suffix()]
 
 func _update_stats() -> void:
 	for entry in _stat_entries:
@@ -298,7 +297,8 @@ func _update_stats() -> void:
 		if value_label == null:
 			continue
 		var value: Variant = _read_path(mapping.get("path", []))
-		var display_value: String = str(value) if value != null else "N/A"
+		var group := str(mapping.get("group", "resource"))
+		var display_value: String = _display_for_value(group, value)
 		var change_state := _determine_change_state(entry, value)
 		if indicator_label != null:
 			_apply_indicator_state(indicator_label, change_state)
@@ -316,8 +316,7 @@ func _update_stats() -> void:
 
 func _set_disconnected() -> void:
 	day_label.text = "DAY: N/A"
-	phase_label.text = "PHASE: N/A"
-	time_label.text = "HOUR: N/A"
+	time_label.text = "TIME: N/A"
 	_set_alerts_count(0)
 	_alert_acknowledged.clear()
 	_clear_alert_items()
@@ -485,6 +484,27 @@ func _to_numeric(value: Variant) -> float:
 		return float(value)
 	return NAN
 
+func _display_for_value(group: String, value: Variant) -> String:
+	if value == null:
+		return "N/A"
+	if group == "currency":
+		return _format_currency_value(value)
+	return str(value)
+
+func _format_currency_value(value: Variant) -> String:
+	var amount := 0
+	match typeof(value):
+		TYPE_INT:
+			amount = int(value)
+		TYPE_FLOAT:
+			amount = int(round(value))
+		_:
+			return "0.000"
+	return _currency_display(amount)
+
+func _currency_display(amount: int) -> String:
+	return Resources.format_currency(amount)
+
 func _on_pause_button_pressed() -> void:
 	if _game == null:
 		return
@@ -543,6 +563,16 @@ func _pacing_suffix() -> String:
 	if label == "":
 		return ""
 	return " (%s)" % label
+
+func _debug_fast_forward_suffix() -> String:
+	if not OS.is_debug_build():
+		return ""
+	if _game == null or not _game.has_method("get_last_hours_processed"):
+		return ""
+	var hours_processed := int(_game.get_last_hours_processed())
+	if hours_processed <= 1:
+		return ""
+	return " +%dh" % hours_processed
 
 func _read_path(path: Array) -> Variant:
 	if path.is_empty():

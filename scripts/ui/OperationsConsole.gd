@@ -149,9 +149,27 @@ const INPUT_CONFIG := {
 		"description": "Quantity to redeploy. Actual yield depends on current efficiency.",
 		"payload_key": "amount",
 	},
+	"SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/DirectionRow/Direction": {
+		"label_path": "SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/DirectionRow/DirectionLabel",
+		"label": "ACTION",
+		"description": "BUY spends silver to restock; SELL liquidates surplus resources.",
+		"payload_key": "direction",
+	},
+	"SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/ResourceRow/Resource": {
+		"label_path": "SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/ResourceRow/ResourceLabel",
+		"label": "RESOURCE",
+		"description": "Choose the core supply to trade.",
+		"payload_key": "resource",
+	},
+	"SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/AmountRow/Amount": {
+		"label_path": "SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/AmountRow/AmountLabel",
+		"label": "AMOUNT",
+		"description": "Units to trade per command.",
+		"payload_key": "amount",
+	},
 }
 const NODE_TOOLTIP_CONFIG := {
-	"SectionPressure/PressureToggle": {"description": "Toggle Pressure Levers section"},
+	"SectionPressure/PressureToggle": {"description": "Toggle Policies section"},
 	"SectionExpeditions/ExpeditionToggle": {"description": "Toggle Expeditions section"},
 	"SectionConversions/ConversionToggle": {"description": "Toggle Emergency Conversions section"},
 	"SectionPressure/PressureContent/RationHardening/CardRoot/HeaderRow/Title": {"description": "Ration Hardening lever"},
@@ -167,6 +185,9 @@ const NODE_TOOLTIP_CONFIG := {
 	"SectionExpeditions/ExpeditionContent/ModuleAbandonment/CardRoot/FooterRow/Apply": {"lever_id": LEVER_MODULE_ABANDONMENT},
 	"SectionConversions/ConversionContent/EmergencyConversion/CardRoot/FooterRow/Apply": {"lever_id": LEVER_EMERGENCY_CONVERSION},
 }
+
+const TRADE_ACTIONS := ["Buy", "Sell"]
+const TRADE_RESOURCE_OPTIONS := ["food", "water", "materials"]
 
 @onready var _sections_root: VBoxContainer = $Layout/Scroll/Root
 @onready var pressure_toggle: Button = _require_section_node("SectionPressure/PressureToggle", "Button") as Button
@@ -205,6 +226,12 @@ const NODE_TOOLTIP_CONFIG := {
 @onready var conversion_amount: SpinBox = _require_section_node("SectionConversions/ConversionContent/EmergencyConversion/CardRoot/Inputs/AmountRow/Amount", "SpinBox") as SpinBox
 @onready var conversion_execute: Button = _require_section_node("SectionConversions/ConversionContent/EmergencyConversion/CardRoot/FooterRow/Apply", "Button") as Button
 @onready var conversion_result: Label = _require_section_node("SectionConversions/ConversionContent/EmergencyConversion/CardRoot/FooterRow/Result", "Label") as Label
+
+@onready var trade_direction: OptionButton = _require_section_node("SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/DirectionRow/Direction", "OptionButton") as OptionButton
+@onready var trade_resource: OptionButton = _require_section_node("SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/ResourceRow/Resource", "OptionButton") as OptionButton
+@onready var trade_amount: SpinBox = _require_section_node("SectionPressure/PressureContent/TradePolicy/CardRoot/Inputs/AmountRow/Amount", "SpinBox") as SpinBox
+@onready var trade_execute: Button = _require_section_node("SectionPressure/PressureContent/TradePolicy/CardRoot/FooterRow/Apply", "Button") as Button
+@onready var trade_result: Label = _require_section_node("SectionPressure/PressureContent/TradePolicy/CardRoot/FooterRow/Result", "Label") as Label
 
 var _sim_bridge: SimBridge = null
 var _section_config: Dictionary = {}
@@ -262,6 +289,11 @@ func _validate_required_input_nodes() -> bool:
 		conversion_to,
 		conversion_amount,
 		conversion_execute,
+		trade_direction,
+		trade_resource,
+		trade_amount,
+		trade_execute,
+		trade_result,
 	]
 	for node in required_nodes:
 		if node != null:
@@ -293,7 +325,7 @@ func _setup_sections() -> void:
 		"pressure": {
 			"toggle": pressure_toggle,
 			"content": pressure_content,
-			"label": "PRESSURE LEVERS",
+			"label": "POLICIES",
 			"open": true,
 		},
 		"expeditions": {
@@ -413,6 +445,7 @@ func _bind_buttons() -> void:
 	info_execute.pressed.connect(_apply_information_throttling)
 	abandonment_execute.pressed.connect(_apply_module_abandonment)
 	conversion_execute.pressed.connect(_apply_emergency_conversion)
+	trade_execute.pressed.connect(_apply_trade)
 func _map_lever_nodes() -> void:
 	_lever_nodes.clear()
 	for lever_id in LEVER_BASE_PATHS.keys():
@@ -539,6 +572,24 @@ func _refresh_conversion_options() -> void:
 			conversion_to.add_item(key)
 		conversion_to.select(1)
 	_update_conversion_highlight(burns)
+
+	if trade_direction != null:
+		trade_direction.clear()
+		for action in TRADE_ACTIONS:
+			trade_direction.add_item(action)
+		trade_direction.select(0)
+
+	if trade_resource != null:
+		trade_resource.clear()
+		for resource in TRADE_RESOURCE_OPTIONS:
+			trade_resource.add_item(resource)
+		trade_resource.select(0)
+
+	if trade_amount != null:
+		trade_amount.min_value = 1
+		trade_amount.max_value = 999
+		trade_amount.step = 1
+		trade_amount.value = 1
 
 func _update_conversion_highlight(burns: Dictionary) -> void:
 	if conversion_from == null:
@@ -829,6 +880,27 @@ func _apply_emergency_conversion() -> void:
 		"amount": _variant_to_int(conversion_amount.value),
 	}
 	_set_result(conversion_result, _apply_lever(LEVER_EMERGENCY_CONVERSION, payload), LEVER_EMERGENCY_CONVERSION)
+
+func _apply_trade() -> void:
+	if not _input_controls_ready:
+		return
+	var direction := trade_direction.get_item_text(trade_direction.selected).to_lower()
+	var resource := trade_resource.get_item_text(trade_resource.selected).to_lower()
+	var amount := _variant_to_int(trade_amount.value)
+	var result := _queue_trade(resource, direction, amount)
+	var message := str(result.get("message", "TRADE QUEUED")).to_upper()
+	if trade_result != null:
+		trade_result.text = message
+
+func _queue_trade(resource: String, direction: String, amount: int) -> Dictionary:
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		return {"ok": false, "message": "SIM UNAVAILABLE"}
+	var sim := _sim_bridge.get_sim()
+	if sim == null:
+		return {"ok": false, "message": "SIM UNAVAILABLE"}
+	if not sim.has_method("queue_trade"):
+		return {"ok": false, "message": "TRADE NOT SUPPORTED"}
+	return sim.queue_trade(resource, direction, amount)
 
 func _apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	if _sim_bridge == null or not _sim_bridge.has_sim():
