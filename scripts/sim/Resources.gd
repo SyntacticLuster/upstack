@@ -161,9 +161,9 @@ func summary() -> String:
 
 static func format_currency(value: int) -> String:
 	var prefix := "-" if value < 0 else ""
-	var absolute := abs(value)
-	var whole := absolute / CURRENCY_SUBUNITS_PER_OZT
-	var fraction := absolute % CURRENCY_SUBUNITS_PER_OZT
+	var absolute = abs(value)
+	var whole = absolute / CURRENCY_SUBUNITS_PER_OZT
+	var fraction = absolute % CURRENCY_SUBUNITS_PER_OZT
 	var fraction_text := str(fraction)
 	while fraction_text.length() < CURRENCY_DISPLAY_DECIMALS:
 		fraction_text = "0" + fraction_text

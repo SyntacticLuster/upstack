@@ -544,7 +544,7 @@ func _prepare_daily_rolls(sim_day: int) -> void:
 func _apply_hourly_consumption() -> void:
 	if res == null:
 		return
-	var population := max(res.population, 0)
+	var population = max(res.population, 0)
 	if population == 0:
 		return
 	var food_rate := float(population) * food_ration * ration_consumption_multiplier_today / float(HOURS_PER_DAY)
@@ -554,12 +554,12 @@ func _apply_hourly_consumption() -> void:
 	var food_to_consume := int(floor(_hourly_food_accum))
 	var water_to_consume := int(floor(_hourly_water_accum))
 	if food_to_consume > 0:
-		var actual_food := min(res.food, food_to_consume)
+		var actual_food = min(res.food, food_to_consume)
 		res.food = res.food - actual_food
 		_daily_food_consumed += actual_food
 		_hourly_food_accum -= float(actual_food)
 	if water_to_consume > 0:
-		var actual_water := min(res.water, water_to_consume)
+		var actual_water = min(res.water, water_to_consume)
 		res.water = res.water - actual_water
 		_daily_water_consumed += actual_water
 		_hourly_water_accum -= float(actual_water)
@@ -2612,18 +2612,18 @@ func _run_civil_unrest_daily(sim_day: int, sim_tower: Tower, sim_db: ModuleDB, o
 		return
 	var unrest_days := int(floor(float(unrest_hours) / float(HOURS_PER_DAY)))
 	var module_target: Dictionary = {}
-	var incident_roll := float(_daily_rolls.get("unrest_incident_roll", 1.0))
-	var pop_chance := clamp(
+	var incident_roll = float(_daily_rolls.get("unrest_incident_roll", 1.0))
+	var pop_chance = clamp(
 		CIVIL_UNREST_POP_LOSS_BASE_CHANCE + float(unrest_days) * CIVIL_UNREST_POP_LOSS_PER_DAY,
 		0.0,
 		CIVIL_UNREST_POP_LOSS_CAP,
 	)
-	var module_chance := clamp(
+	var module_chance = clamp(
 		CIVIL_UNREST_MODULE_BASE_CHANCE + float(unrest_days) * CIVIL_UNREST_MODULE_PER_DAY,
 		0.0,
 		CIVIL_UNREST_MODULE_CAP,
 	)
-	var total_threshold := min(1.0, pop_chance + module_chance)
+	var total_threshold = min(1.0, pop_chance + module_chance)
 	var incident_type := ""
 	if incident_roll <= pop_chance:
 		_apply_unrest_pop_loss(obs)
@@ -2710,7 +2710,7 @@ func _apply_unrest_module_sabotage(sim_tower: Tower, sim_db: ModuleDB, obs: Arra
 	if candidates.is_empty():
 		return {}
 	var module_roll := float(_daily_rolls.get("unrest_module_roll", 0.0))
-	var normalized := clamp(module_roll, 0.0, 0.999999)
+	var normalized = clamp(module_roll, 0.0, 0.999999)
 	var idx := int(floor(normalized * float(candidates.size())))
 	idx = clamp(idx, 0, candidates.size() - 1)
 	var target := candidates[idx]
@@ -2739,7 +2739,7 @@ func _civil_unrest_module_candidates(sim_tower: Tower, sim_db: ModuleDB) -> Arra
 			for x in range(sim_tower.width):
 				if x < 0 or x >= row.size():
 					continue
-				var module_id := row[x]
+				var module_id = row[x]
 				if module_id == null:
 					continue
 				if _is_module_abandoned(f, x, y):
