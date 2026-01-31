@@ -62,6 +62,31 @@ func get_res() -> Object:
 		return null
 	return _sim.get("res")
 
+func get_attention_meter_value() -> float:
+	if _sim == null:
+		return 0.0
+	if _sim.has_method("get_attention_meter_value"):
+		return float(_sim.get_attention_meter_value())
+	var value: Variant = _get_sim_property("expedition_attention")
+	if value == null:
+		return 0.0
+	match typeof(value):
+		TYPE_INT:
+			return float(value)
+		TYPE_FLOAT:
+			return float(value)
+	return 0.0
+
+func get_threat_meter_value() -> int:
+	if _sim == null:
+		return 0
+	if _sim.has_method("get_threat_meter_value"):
+		return int(_sim.get_threat_meter_value())
+	var res_value := get_res() as Resources
+	if res_value != null:
+		return int(res_value.threat)
+	return 0
+
 func get_events() -> Array[Dictionary]:
 	var empty_events: Array[Dictionary] = []
 	if _sim == null:

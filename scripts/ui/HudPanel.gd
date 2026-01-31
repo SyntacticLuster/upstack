@@ -25,6 +25,11 @@ const COLLAPSED_ICON_MAP := {
 const COLOR_STATUS_GOOD: Color = Color(0.29, 0.56, 0.85)
 const COLOR_STATUS_BAD: Color = Color(0.78, 0.22, 0.22)
 const COLOR_STATUS_NEUTRAL: Color = Color(0.44, 0.53, 0.63)
+const COLOR_METER_GREEN: Color = Color(0.22, 0.64, 0.39)
+const COLOR_METER_YELLOW: Color = Color(0.78, 0.64, 0.2)
+const COLOR_METER_RED: Color = Color(0.78, 0.22, 0.22)
+const METER_GREEN_MAX := 49.0
+const METER_YELLOW_MAX := 79.0
 const VALUE_TWEEN_DURATION := 0.18
 const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 
@@ -50,6 +55,10 @@ const LEFT_RAIL_COLLAPSED_WIDTH := 32.0
 @onready var expanded_rail: VBoxContainer = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail
 @onready var collapsed_rail: VBoxContainer = $Root/MainRow/LeftRailPanel/LeftRailRoot/CollapsedRail
 @onready var resource_cards: VBoxContainer = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceCards
+@onready var attention_value_label: Label = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter/AttentionHeader/AttentionValue
+@onready var threat_value_label: Label = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter/ThreatHeader/ThreatValue
+@onready var attention_bar: ProgressBar = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter/AttentionBar
+@onready var threat_bar: ProgressBar = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter/ThreatBar
 @onready var status_chips: FlowContainer = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/StatusChips
 @onready var collapse_button: Button = $Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/CollapseRail
 @onready var expand_button: Button = $Root/MainRow/LeftRailPanel/LeftRailRoot/CollapsedRail/ExpandRail
@@ -63,9 +72,13 @@ var _left_rail_collapsed: bool = false
 var _left_rail_user_collapsed: bool = false
 var _left_rail_width: float = 180.0
 var _alert_acknowledged: Dictionary = {}
+var _meter_style_green: StyleBoxFlat = null
+var _meter_style_yellow: StyleBoxFlat = null
+var _meter_style_red: StyleBoxFlat = null
 
 func _ready() -> void:
 	_build_stat_entries()
+	_build_meter_styles()
 	alerts_value.text = "0"
 	_connect_pacing_buttons()
 	_refresh_pacing_controls()
@@ -105,6 +118,7 @@ func refresh() -> void:
 		return
 	_day_phase_time()
 	_update_stats()
+	_update_meters()
 	_refresh_alerts()
 	_refresh_overdrive_status()
 
@@ -322,6 +336,7 @@ func _set_disconnected() -> void:
 	_set_alerts_count(0)
 	_alert_acknowledged.clear()
 	_clear_alert_items()
+	_set_meter_disconnected()
 	for entry in _stat_entries:
 		var value_label_variant: Variant = entry.get("value_label")
 		var value_label := value_label_variant as Label
@@ -336,6 +351,66 @@ func _set_disconnected() -> void:
 		entry.last_numeric = NAN
 	if overdrive_status_label != null:
 		overdrive_status_label.text = "Overdrive: N/A"
+
+func _build_meter_styles() -> void:
+	_meter_style_green = _build_meter_style(COLOR_METER_GREEN)
+	_meter_style_yellow = _build_meter_style(COLOR_METER_YELLOW)
+	_meter_style_red = _build_meter_style(COLOR_METER_RED)
+
+func _build_meter_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.corner_radius_top_left = 2
+	style.corner_radius_top_right = 2
+	style.corner_radius_bottom_left = 2
+	style.corner_radius_bottom_right = 2
+	return style
+
+func _set_meter_disconnected() -> void:
+	if attention_value_label != null:
+		attention_value_label.text = "N/A"
+	if threat_value_label != null:
+		threat_value_label.text = "N/A"
+	if attention_bar != null:
+		attention_bar.value = 0.0
+		_apply_meter_band_style(attention_bar, 0.0)
+	if threat_bar != null:
+		threat_bar.value = 0.0
+		_apply_meter_band_style(threat_bar, 0.0)
+
+func _update_meters() -> void:
+	if attention_value_label == null or threat_value_label == null:
+		return
+	if attention_bar == null or threat_bar == null:
+		return
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		_set_meter_disconnected()
+		return
+	var attention_raw: float = _sim_bridge.get_attention_meter_value()
+	var threat_raw: float = float(_sim_bridge.get_threat_meter_value())
+	var attention_value: float = _normalize_meter_value(attention_raw)
+	var threat_value: float = _normalize_meter_value(threat_raw)
+	attention_bar.value = attention_value
+	threat_bar.value = threat_value
+	attention_value_label.text = str(int(round(attention_value)))
+	threat_value_label.text = str(int(round(threat_value)))
+	_apply_meter_band_style(attention_bar, attention_value)
+	_apply_meter_band_style(threat_bar, threat_value)
+
+func _normalize_meter_value(raw: float) -> float:
+	var normalized: float = raw
+	if normalized >= 0.0 and normalized <= 1.0:
+		normalized = normalized * 100.0
+	return clamp(normalized, 0.0, 100.0)
+
+func _apply_meter_band_style(bar: ProgressBar, value: float) -> void:
+	var style: StyleBoxFlat = _meter_style_green
+	if value > METER_YELLOW_MAX:
+		style = _meter_style_red
+	elif value > METER_GREEN_MAX:
+		style = _meter_style_yellow
+	if style != null:
+		bar.add_theme_stylebox_override("fill", style)
 
 func _refresh_alerts() -> void:
 	if _sim_bridge == null or not _sim_bridge.has_sim():

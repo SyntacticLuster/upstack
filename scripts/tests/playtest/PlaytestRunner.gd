@@ -11,6 +11,7 @@ const PlaytestLoggerScript: Script = preload("res://scripts/tests/playtest/Playt
 const SimScript: Script = preload("res://scripts/sim/Sim.gd")
 
 const SCENARIOS_DIR: String = "res://scripts/tests/scenarios"
+const FALLBACK_SCENARIOS_DIR: String = "res://tests/scenarios"
 const DEFAULT_MAX_HOURS: int = 1000
 const EXIT_SUCCESS: int = 0
 const EXIT_INVARIANT_FAIL: int = 1
@@ -29,6 +30,7 @@ var _logger: RefCounted  # PlaytestLogger
 var _total_scenarios: int = 0
 var _passed_scenarios: int = 0
 var _failed_scenarios: int = 0
+var _resolved_scenarios_dir: String = SCENARIOS_DIR
 
 
 func _ready() -> void:
@@ -58,8 +60,10 @@ func _run_all() -> void:
 	_logger.verbose = _verbose
 
 	var scenarios: Array[Dictionary] = _discover_scenarios()
+	if _verbose:
+		_logger.log_info("Scenario directory: %s" % _resolved_scenarios_dir)
 	if scenarios.is_empty():
-		_logger.log_error("No scenarios found in %s" % SCENARIOS_DIR)
+		_logger.log_error("No scenarios found in %s" % _resolved_scenarios_dir)
 		get_tree().quit(EXIT_EXECUTION_ERROR)
 		return
 
@@ -80,8 +84,21 @@ func _run_all() -> void:
 
 
 func _discover_scenarios() -> Array[Dictionary]:
+	var scenarios: Array[Dictionary] = _load_scenarios_from_dir(SCENARIOS_DIR)
+	_resolved_scenarios_dir = SCENARIOS_DIR
+
+	if scenarios.is_empty():
+		var fallback_scenarios: Array[Dictionary] = _load_scenarios_from_dir(FALLBACK_SCENARIOS_DIR)
+		if not fallback_scenarios.is_empty():
+			scenarios = fallback_scenarios
+			_resolved_scenarios_dir = FALLBACK_SCENARIOS_DIR
+
+	return scenarios
+
+
+func _load_scenarios_from_dir(dir_path: String) -> Array[Dictionary]:
 	var scenarios: Array[Dictionary] = []
-	var dir := DirAccess.open(SCENARIOS_DIR)
+	var dir := DirAccess.open(dir_path)
 	if dir == null:
 		return scenarios
 
@@ -91,7 +108,7 @@ func _discover_scenarios() -> Array[Dictionary]:
 		if file_name.ends_with(".json"):
 			var scenario_name := file_name.get_basename()
 			if _scenario_filter == "" or scenario_name == _scenario_filter:
-				var path := "%s/%s" % [SCENARIOS_DIR, file_name]
+				var path := "%s/%s" % [dir_path, file_name]
 				var loaded: Dictionary = _loader.load_scenario(path)
 				if loaded.has("error"):
 					_logger.log_error("Failed to load %s: %s" % [path, loaded["error"]])
@@ -133,6 +150,11 @@ func _run_scenario(scenario: Dictionary) -> bool:
 
 	var passed: bool = result_a.get("passed", false) and result_b.get("passed", false) and deterministic
 
+	var commands_run: Array[String] = []
+	var commands_variant: Variant = result_a.get("commands_run", [])
+	if commands_variant is Array:
+		commands_run = commands_variant as Array[String]
+
 	_logger.log_scenario_summary(
 		scenario_name,
 		seed_value,
@@ -142,7 +164,8 @@ func _run_scenario(scenario: Dictionary) -> bool:
 		result_a.get("invariants_checked", 0),
 		result_a.get("invariants_passed", 0),
 		result_a.get("invariants_failed", 0),
-		sig_a
+		sig_a,
+		commands_run
 	)
 
 	return passed
@@ -161,10 +184,14 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 
 	var hours_simulated: int = 0
 	var actions_executed: int = 0
+	var commands_run: Array[String] = []
 
 	for action in actions:
 		if action is Dictionary:
-			var exec_result: Dictionary = _executor.execute(action)
+			var action_dict: Dictionary = action as Dictionary
+			var action_type := str(action_dict.get("type", ""))
+			commands_run.append(action_type)
+			var exec_result: Dictionary = _executor.execute(action_dict)
 			actions_executed += 1
 			hours_simulated = sim.hour_index
 
@@ -192,6 +219,7 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 		"invariants_checked": _invariants.total_checked(),
 		"invariants_passed": _invariants.total_passed(),
 		"invariants_failed": _invariants.total_failed(),
+		"commands_run": commands_run,
 	}
 
 

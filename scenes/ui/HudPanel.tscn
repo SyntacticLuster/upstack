@@ -137,6 +137,54 @@ text = "RESOURCES"
 size_flags_horizontal = 3
 custom_constants/separation = 8
 
+[node name="ResourceMeters" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
+size_flags_horizontal = 3
+custom_constants/separation = 6
+
+[node name="AttentionMeter" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters"]
+custom_constants/separation = 4
+tooltip_text = "External attention pressure (0-100)."
+
+[node name="AttentionHeader" type="HBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter"]
+custom_constants/separation = 6
+
+[node name="AttentionLabel" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter/AttentionHeader"]
+text = "ATTENTION"
+
+[node name="AttentionValue" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter/AttentionHeader"]
+text = "0"
+size_flags_horizontal = 3
+horizontal_alignment = 2
+
+[node name="AttentionBar" type="ProgressBar" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/AttentionMeter"]
+min_value = 0.0
+max_value = 100.0
+value = 0.0
+show_percentage = false
+size_flags_horizontal = 3
+
+[node name="ThreatMeter" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters"]
+custom_constants/separation = 4
+tooltip_text = "External threat level (0-100)."
+
+[node name="ThreatHeader" type="HBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter"]
+custom_constants/separation = 6
+
+[node name="ThreatLabel" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter/ThreatHeader"]
+text = "THREAT"
+
+[node name="ThreatValue" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter/ThreatHeader"]
+text = "0"
+size_flags_horizontal = 3
+horizontal_alignment = 2
+
+[node name="ThreatBar" type="ProgressBar" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter"]
+min_value = 0.0
+max_value = 100.0
+value = 0.0
+show_percentage = false
+size_flags_horizontal = 3
+
 [node name="StatusLabel" type="Label" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail"]
 text = "STATUS"
 

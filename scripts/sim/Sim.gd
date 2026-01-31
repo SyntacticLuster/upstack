@@ -48,7 +48,28 @@ const MODULE_DELTA_KEYS: Array[String] = [
 ]
 
 const THREAT_EVENT_THRESHOLDS: Array[int] = [40, 80, 120, 160, 200]
-const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 45, 30, 15]
+const MORALE_EVENT_THRESHOLDS: Array[int] = [60, 40, 30, 20, 10]
+const MORALE_TIER_STABLE := 0
+const MORALE_TIER_WARNING_1 := 1
+const MORALE_TIER_WARNING_2 := 2
+const MORALE_TIER_WARNING_3 := 3
+const MORALE_TIER_OPTIONAL := 4
+const MORALE_TIER_NONCOMPLIANT := 5
+const MORALE_WARNING_1_ENTER := 60
+const MORALE_WARNING_1_EXIT := 62
+const MORALE_WARNING_2_ENTER := 40
+const MORALE_WARNING_2_EXIT := 42
+const MORALE_WARNING_3_ENTER := 30
+const MORALE_WARNING_3_EXIT := 32
+const MORALE_OPTIONAL_ENTER := 20
+const MORALE_OPTIONAL_EXIT := 25
+const MORALE_NONCOMPLIANT_ENTER := 10
+const MORALE_NONCOMPLIANT_EXIT := 12
+const COMPLIANCE_OPTIONAL_STALL_CHANCE := 0.15
+const COMPLIANCE_NONCOMPLIANT_STALL_CHANCE := 0.35
+const MUTINY_ROLL_BASE := 0.04
+const MUTINY_ROLL_PER_POINT := 0.005
+const MUTINY_ROLL_CAP := 0.10
 const ATTENTION_SUMMARY_INTERVAL_HOURS := 6
 const INTRO_QUIET_DAYS := 1
 const ATTENTION_DEBT_LOW_THRESHOLD := 10.0
@@ -72,6 +93,8 @@ const RNG_OFFSET_UNREST_MODULE := 7
 const RNG_OFFSET_UNREST_TERMINAL := 8
 const RNG_OFFSET_UNREST_TERMINAL_OUTCOME := 9
 const RNG_OFFSET_ACTIVE_EXPEDITION := 10
+const RNG_OFFSET_COMPLIANCE := 11
+const RNG_OFFSET_MUTINY := 12
 
 # Expedition state machine states.
 const EXPEDITION_STATE_PLANNED := "PLANNED"
@@ -124,6 +147,7 @@ const PHASE_COMMANDS := "commands"
 const PHASE_INCIDENTS := "incidents"
 const PHASE_EXPEDITIONS := "expeditions"
 const PHASE_STRUCTURAL := "structural"
+const PHASE_MORALE := "morale"
 
 class SimCommand extends RefCounted:
 	var type: String = ""
@@ -252,6 +276,7 @@ var lever_events: Array[Dictionary] = []
 var events: Array[Dictionary] = []
 var visibility_triggered: bool = false
 var _event_sequence: int = 0
+var _morale_tier: int = MORALE_TIER_STABLE
 var _last_maintenance_shortfall: bool = false
 var _last_attention_summary_hour_index: int = -1
 var _last_attention_summary_value: float = 0.0
@@ -447,6 +472,7 @@ func _reset_policies_and_pools() -> void:
 	events.clear()
 	_event_sequence = 0
 	visibility_triggered = false
+	_morale_tier = MORALE_TIER_STABLE
 	_reset_rng_usage_log()
 	_last_maintenance_shortfall = false
 	_last_attention_summary_hour_index = -1
@@ -801,6 +827,14 @@ func get_last_production_metrics() -> Dictionary:
 		return {}
 	return _last_production_metrics.duplicate(true)
 
+func get_attention_meter_value() -> float:
+	return expedition_attention
+
+func get_threat_meter_value() -> int:
+	if res == null:
+		return 0
+	return int(res.threat)
+
 func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	var ok := false
 	var sanitized: Dictionary = {}
@@ -1064,25 +1098,163 @@ func _emit_threat_band_events(pre_threat: int, post_threat: int, sim_day: int) -
 				true
 			)
 
-func _emit_morale_band_events(pre_morale: int, post_morale: int, sim_day: int) -> void:
-	for threshold in MORALE_EVENT_THRESHOLDS:
-		if pre_morale >= threshold and post_morale < threshold:
-			var message := "Morale critical (%d). Compliance is voluntary now.\nForecast: Recovery is unlikely under current policies." % post_morale
-			var payload := {
-				"threshold": threshold,
-				"value": post_morale,
-			}
-			_emit_event(
-				"MORALE_BAND_CROSSED",
-				message,
-				"warn",
-				"sticky",
-				payload,
-				"morale",
-				sim_day,
-				hour_of_day,
-				true
-			)
+func _morale_tier_raw(value: int) -> int:
+	if value < MORALE_NONCOMPLIANT_ENTER:
+		return MORALE_TIER_NONCOMPLIANT
+	if value <= MORALE_OPTIONAL_ENTER:
+		return MORALE_TIER_OPTIONAL
+	if value <= MORALE_WARNING_3_ENTER:
+		return MORALE_TIER_WARNING_3
+	if value <= MORALE_WARNING_2_ENTER:
+		return MORALE_TIER_WARNING_2
+	if value <= MORALE_WARNING_1_ENTER:
+		return MORALE_TIER_WARNING_1
+	return MORALE_TIER_STABLE
+
+func _morale_tier_exit_threshold(tier: int) -> int:
+	match tier:
+		MORALE_TIER_NONCOMPLIANT:
+			return MORALE_NONCOMPLIANT_EXIT
+		MORALE_TIER_OPTIONAL:
+			return MORALE_OPTIONAL_EXIT
+		MORALE_TIER_WARNING_3:
+			return MORALE_WARNING_3_EXIT
+		MORALE_TIER_WARNING_2:
+			return MORALE_WARNING_2_EXIT
+		MORALE_TIER_WARNING_1:
+			return MORALE_WARNING_1_EXIT
+		_:
+			return 1000
+
+func _morale_tier_from_value(value: int, current_tier: int) -> int:
+	var raw_tier := _morale_tier_raw(value)
+	if raw_tier > current_tier:
+		return raw_tier
+	if raw_tier == current_tier:
+		return current_tier
+	var next := current_tier
+	while next > raw_tier:
+		var exit_threshold := _morale_tier_exit_threshold(next)
+		if value >= exit_threshold:
+			next -= 1
+		else:
+			break
+	return next
+
+func _morale_tier_label(tier: int) -> String:
+	match tier:
+		MORALE_TIER_WARNING_1:
+			return "warning_1"
+		MORALE_TIER_WARNING_2:
+			return "warning_2"
+		MORALE_TIER_WARNING_3:
+			return "warning_3"
+		MORALE_TIER_OPTIONAL:
+			return "optional"
+		MORALE_TIER_NONCOMPLIANT:
+			return "noncompliant"
+		_:
+			return "stable"
+
+func _morale_tier_severity(tier: int) -> String:
+	if tier == MORALE_TIER_STABLE:
+		return "info"
+	return "warn"
+
+func _morale_tier_message(tier: int, value: int) -> String:
+	match tier:
+		MORALE_TIER_WARNING_1:
+			return "Unrest rising. Morale at %d." % value
+		MORALE_TIER_WARNING_2:
+			return "Strain deepening. Morale at %d." % value
+		MORALE_TIER_WARNING_3:
+			return "Breakdown risk. Morale at %d." % value
+		MORALE_TIER_OPTIONAL:
+			return "Compliance is optional. Morale at %d." % value
+		MORALE_TIER_NONCOMPLIANT:
+			return "NONCOMPLIANT. Mutiny risk rising. Morale at %d." % value
+		_:
+			return "Morale stabilizing. Morale at %d." % value
+
+func _update_morale_tier(value: int, sim_day: int, include_hour: bool) -> void:
+	var next_tier := _morale_tier_from_value(value, _morale_tier)
+	if next_tier == _morale_tier:
+		return
+	_morale_tier = next_tier
+	var payload := {
+		"tier": _morale_tier_label(next_tier),
+		"value": value,
+	}
+	_emit_event(
+		"MORALE_BAND_CROSSED",
+		_morale_tier_message(next_tier, value),
+		_morale_tier_severity(next_tier),
+		"sticky",
+		payload,
+		"morale",
+		sim_day,
+		hour_of_day,
+		include_hour
+	)
+
+func _compliance_stall_chance_for_tier(tier: int) -> float:
+	match tier:
+		MORALE_TIER_OPTIONAL:
+			return COMPLIANCE_OPTIONAL_STALL_CHANCE
+		MORALE_TIER_NONCOMPLIANT:
+			return COMPLIANCE_NONCOMPLIANT_STALL_CHANCE
+		_:
+			return 0.0
+
+func _command_subject_to_compliance(command_type: String) -> bool:
+	return command_type == CMD_EXPEDITION or command_type == CMD_TRADE
+
+func _emit_morale_band_events(_pre_morale: int, post_morale: int, sim_day: int) -> void:
+	_update_morale_tier(post_morale, sim_day, true)
+
+func _run_mutiny_roll(sim_day: int, sim_res: Resources, obs: Array[String]) -> void:
+	if sim_res.morale >= MORALE_NONCOMPLIANT_ENTER:
+		return
+	if exit_reason != "":
+		return
+	var tracker := _create_rng_tracker(sim_day, PHASE_MORALE, "mutiny_roll", RNG_OFFSET_MUTINY)
+	var roll: float = _rng_randf(tracker)
+	var morale_gap: int = max(MORALE_NONCOMPLIANT_ENTER - sim_res.morale, 0)
+	var chance: float = float(clamp(
+		MUTINY_ROLL_BASE + float(morale_gap) * MUTINY_ROLL_PER_POINT,
+		0.0,
+		MUTINY_ROLL_CAP
+	))
+	var payload := {
+		"roll": roll,
+		"chance": chance,
+		"morale": sim_res.morale,
+	}
+	_emit_event(
+		"MUTINY_ROLL",
+		"Mutiny check roll=%.3f vs %.3f." % [roll, chance],
+		"debug",
+		"dev_only",
+		payload,
+		"morale",
+		sim_day,
+		hour_of_day,
+		true
+	)
+	if roll < chance:
+		exit_reason = EXIT_MUTINY
+		_emit_event(
+			"MUTINY_TRIGGERED",
+			"Mutiny erupts. Command authority collapsing.",
+			"warn",
+			"sticky",
+			payload,
+			"morale",
+			sim_day,
+			hour_of_day,
+			true
+		)
+		_obs_push(obs, "MUTINY_TRIGGERED")
 
 func _emit_materials_exhausted_event(pre_materials: int, post_materials: int, sim_day: int) -> void:
 	if pre_materials > 0 and post_materials <= 0:
@@ -1783,10 +1955,34 @@ func _phase_commands(_sim_day: int, _run_seed: int, sim_tower: Tower, sim_res: R
 	workforce_multiplier_today = 1.0
 	_start_expedition_day()
 
+	var compliance_tier := _morale_tier
+	var compliance_chance := _compliance_stall_chance_for_tier(compliance_tier)
+	var compliance_tracker: Dictionary = {}
+	if compliance_chance > 0.0:
+		compliance_tracker = _create_rng_tracker(_sim_day, PHASE_COMMANDS, "compliance", RNG_OFFSET_COMPLIANCE)
+
 	for cmd in _command_queue:
 		if cmd == null:
 			continue
-		match cmd.type:
+		var cmd_type: String = cmd.type
+		if compliance_chance > 0.0 and _command_subject_to_compliance(cmd_type):
+			var roll := _rng_randf(compliance_tracker)
+			if roll < compliance_chance:
+				var message := "Command stalled (%s). Compliance degraded." % cmd_type
+				_emit_event(
+					"COMPLIANCE_STALL",
+					message,
+					"warn",
+					"dev_only",
+					{"command": cmd_type, "roll": roll, "chance": compliance_chance},
+					"morale",
+					_sim_day,
+					hour_of_day,
+					true
+				)
+				_obs_push(obs, "CMD_STALL@%s" % cmd_type)
+				continue
+		match cmd_type:
 			CMD_SET_RATIONS:
 				_cmd_set_rations(cmd.payload, sim_res, obs)
 			CMD_SET_MODULE_ENABLED:
@@ -3245,6 +3441,7 @@ func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Reso
 	var pre_morale: int = sim_res.morale
 	var pre_materials: int = sim_res.materials
 	var obs: Array[String] = []
+	_update_morale_tier(pre_morale, sim_day, true)
 
 	# Phase -1: levers (policy effects + queued conversions)
 	_phase_levers(sim_day, sim_tower, sim_res, obs)
@@ -3280,6 +3477,7 @@ func _step_day_core(sim_day: int, run_seed: int, sim_tower: Tower, sim_res: Reso
 	var post_materials: int = sim_res.materials
 	_emit_threat_band_events(pre_threat, post_threat, sim_day)
 	_emit_morale_band_events(pre_morale, post_morale, sim_day)
+	_run_mutiny_roll(sim_day, sim_res, obs)
 	_emit_materials_exhausted_event(pre_materials, post_materials, sim_day)
 	_emit_maintenance_shortfall_event(sim_day, growth)
 

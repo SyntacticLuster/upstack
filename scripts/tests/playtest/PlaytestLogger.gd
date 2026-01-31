@@ -35,7 +35,8 @@ func log_scenario_summary(
 	invariants_checked: int,
 	invariants_passed: int,
 	invariants_failed: int,
-	signature: String
+	signature: String,
+	commands_run: Array[String]
 ) -> void:
 	var entry := {
 		"ts": _timestamp(),
@@ -45,6 +46,7 @@ func log_scenario_summary(
 		"hours_simulated": hours_simulated,
 		"days_simulated": days_simulated,
 		"actions_executed": actions_executed,
+		"commands_run": commands_run,
 		"invariants_checked": invariants_checked,
 		"invariants_passed": invariants_passed,
 		"invariants_failed": invariants_failed,
