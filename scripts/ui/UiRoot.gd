@@ -6,9 +6,8 @@ extends CanvasLayer
 
 const BREAKPOINT_TABS := 800.0
 const BREAKPOINT_RAIL_COLLAPSE := 800.0
-const LEDGER_DEFAULT_RATIO := 0.2
-const LEDGER_MIN_HEIGHT := 225.0
-const BOTTOM_SPLIT_RATIO := 0.5
+const LEDGER_DEFAULT_RATIO := 0.5
+const BOTTOM_SPLIT_RATIO := 0.65
 
 @onready var root_control: Control = $Root
 @onready var hud_panel = $Root/Layout/HudPanel
@@ -31,7 +30,7 @@ var _game: Object = null
 var _use_polling: bool = false
 var _poll_accum: float = 0.0
 var _layout_forced_left_rail: bool = false
-var _split_initialized: bool = false
+var _layout_initialized: bool = false
 var _event_bridge: SimBridge = null
 var _seen_event_keys: Dictionary = {}
 var _toast_queue: Array[Dictionary] = []
@@ -40,6 +39,12 @@ var _toast_tween: Tween = null
 var _toast_cooldowns: Dictionary = {}
 var _modal_queue: Array[Dictionary] = []
 var _modal_active_key: String = ""
+var _content_split_ratio: float = LEDGER_DEFAULT_RATIO
+var _content_split_user_set: bool = false
+var _content_split_applying: bool = false
+var _bottom_split_ratio: float = BOTTOM_SPLIT_RATIO
+var _bottom_split_user_set: bool = false
+var _bottom_split_applying: bool = false
 
 func _ready() -> void:
 	_sim = _resolve_sim()
@@ -75,8 +80,23 @@ func _ready() -> void:
 		_refresh_all()
 	if get_viewport() != null and not get_viewport().size_changed.is_connected(_on_viewport_size_changed):
 		get_viewport().size_changed.connect(_on_viewport_size_changed)
+	if bottom_split != null:
+		var dragged_cb := Callable(self, "_on_bottom_split_dragged")
+		if not bottom_split.dragged.is_connected(dragged_cb):
+			bottom_split.dragged.connect(dragged_cb)
+		var size_cb := Callable(self, "_on_bottom_split_resized")
+		if not bottom_split.resized.is_connected(size_cb):
+			bottom_split.resized.connect(size_cb)
+	if content_split != null:
+		var content_dragged_cb := Callable(self, "_on_content_split_dragged")
+		if not content_split.dragged.is_connected(content_dragged_cb):
+			content_split.dragged.connect(content_dragged_cb)
+		var content_size_cb := Callable(self, "_on_content_split_resized")
+		if not content_split.resized.is_connected(content_size_cb):
+			content_split.resized.connect(content_size_cb)
 	call_deferred("_apply_responsive_layout")
 	call_deferred("_log_ui_sizes")
+	call_deferred("_ensure_layout_initialized")
 
 func _log_ui_sizes() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
@@ -106,6 +126,31 @@ func _refresh_all() -> void:
 
 func _on_viewport_size_changed() -> void:
 	_apply_responsive_layout()
+	if not _layout_initialized:
+		call_deferred("_ensure_layout_initialized")
+
+func _ensure_layout_initialized() -> void:
+	if _layout_initialized:
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if _layout_initialized:
+		return
+	if not _layout_has_sizes():
+		call_deferred("_ensure_layout_initialized")
+		return
+	_layout_initialized = true
+	_apply_split_ratio()
+	_apply_bottom_split_ratio()
+
+func _layout_has_sizes() -> bool:
+	if content_split == null or bottom_split == null:
+		return false
+	if content_split.size.y <= 0.0:
+		return false
+	if bottom_split.size.x <= 0.0:
+		return false
+	return true
 
 func _apply_responsive_layout() -> void:
 	if root_control == null:
@@ -184,16 +229,19 @@ func _ensure_tab_titles() -> void:
 			content_tabs.set_tab_title(idx, "FIELD")
 
 func _apply_split_ratio() -> void:
-	if _split_initialized:
+	if content_split == null:
 		return
 	if content_split.size.y <= 0.0:
 		call_deferred("_apply_split_ratio")
 		return
+	if not _layout_initialized and not _content_split_user_set:
+		return
 	var total_height := content_split.size.y
-	var ledger_target := int(max(LEDGER_MIN_HEIGHT, total_height * LEDGER_DEFAULT_RATIO))
-	var top_height := int(max(0.0, total_height - ledger_target))
-	content_split.split_offset = top_height
-	_split_initialized = true
+	var target_ratio := _content_split_ratio if _content_split_user_set else LEDGER_DEFAULT_RATIO
+	if not _is_valid_ratio(target_ratio):
+		_content_split_user_set = false
+		target_ratio = LEDGER_DEFAULT_RATIO
+	_set_content_split_offset_for_ratio(target_ratio, total_height)
 
 func _apply_bottom_split_ratio() -> void:
 	if bottom_split == null:
@@ -201,8 +249,57 @@ func _apply_bottom_split_ratio() -> void:
 	if bottom_split.size.x <= 0.0:
 		call_deferred("_apply_bottom_split_ratio")
 		return
+	if not _layout_initialized and not _bottom_split_user_set:
+		return
 	var total_width := bottom_split.size.x
-	bottom_split.split_offset = int(max(0.0, total_width * BOTTOM_SPLIT_RATIO))
+	var target_ratio := _bottom_split_ratio if _bottom_split_user_set else BOTTOM_SPLIT_RATIO
+	if not _is_valid_ratio(target_ratio):
+		_bottom_split_user_set = false
+		target_ratio = BOTTOM_SPLIT_RATIO
+	_set_bottom_split_offset_for_ratio(target_ratio, total_width)
+
+func _on_bottom_split_dragged(offset: float) -> void:
+	if bottom_split == null:
+		return
+	var width: float = maxf(1.0, bottom_split.size.x)
+	_bottom_split_ratio = clampf(0.5 + (float(offset) / width), 0.0, 1.0)
+	_bottom_split_user_set = true
+
+func _on_bottom_split_resized() -> void:
+	if _bottom_split_applying:
+		return
+	_apply_bottom_split_ratio()
+
+func _on_content_split_dragged(offset: float) -> void:
+	if content_split == null:
+		return
+	var height: float = maxf(1.0, content_split.size.y)
+	_content_split_ratio = clampf(0.5 + (float(offset) / height), 0.0, 1.0)
+	_content_split_user_set = true
+
+func _on_content_split_resized() -> void:
+	if _content_split_applying:
+		return
+	_apply_split_ratio()
+
+func _set_bottom_split_offset_for_ratio(ratio: float, width: float) -> void:
+	if bottom_split == null or width <= 0.0 or _bottom_split_applying:
+		return
+	_bottom_split_applying = true
+	var clamped := clampf(ratio, 0.0, 1.0)
+	bottom_split.split_offset = int(round((clamped - 0.5) * width))
+	_bottom_split_applying = false
+
+func _set_content_split_offset_for_ratio(ratio: float, height: float) -> void:
+	if content_split == null or height <= 0.0 or _content_split_applying:
+		return
+	_content_split_applying = true
+	var clamped := clampf(ratio, 0.0, 1.0)
+	content_split.split_offset = int(round((clamped - 0.5) * height))
+	_content_split_applying = false
+
+func _is_valid_ratio(ratio: float) -> bool:
+	return ratio >= 0.0 and ratio <= 1.0
 
 func _ensure_expedition_tab_titles() -> void:
 	if expedition_tabs == null:
