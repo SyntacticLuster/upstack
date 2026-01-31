@@ -6,14 +6,23 @@ extends CanvasLayer
 
 const BREAKPOINT_TABS := 800.0
 const BREAKPOINT_RAIL_COLLAPSE := 800.0
-const LEDGER_DEFAULT_RATIO := 0.5
-const BOTTOM_SPLIT_RATIO := 0.65
+const V_DEFAULT_RATIO := 0.70
+const H_TOP_DEFAULT_RATIO := 0.50
+const H_BOTTOM_DEFAULT_RATIO := 0.50
+const UI_LAYOUT_SECTION := "ui_layout"
+const UI_LAYOUT_VERSION := 1
+const UI_LAYOUT_VERSION_KEY := "layout_version"
+const UI_SPLIT_V_RATIO_KEY := "ui_split_v_ratio"
+const UI_SPLIT_TOP_H_RATIO_KEY := "ui_split_top_h_ratio"
+const UI_SPLIT_BOTTOM_H_RATIO_KEY := "ui_split_bottom_h_ratio"
+const UI_LAYOUT_PATH := "user://ui_layout.cfg"
 
 @onready var root_control: Control = $Root
 @onready var hud_panel = $Root/Layout/HudPanel
 @onready var content_split: VSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit
 @onready var content_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentTabs
 @onready var console_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole
+@onready var top_split: HSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole/Layout/Scroll/Root/TopPoliciesSplit
 @onready var bottom_split: HSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit
 @onready var expedition_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs
 @onready var expeditions_root: VBoxContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs/ExpeditionsTab/ExpeditionsRoot
@@ -39,10 +48,13 @@ var _toast_tween: Tween = null
 var _toast_cooldowns: Dictionary = {}
 var _modal_queue: Array[Dictionary] = []
 var _modal_active_key: String = ""
-var _content_split_ratio: float = LEDGER_DEFAULT_RATIO
+var _content_split_ratio: float = V_DEFAULT_RATIO
 var _content_split_user_set: bool = false
 var _content_split_applying: bool = false
-var _bottom_split_ratio: float = BOTTOM_SPLIT_RATIO
+var _top_split_ratio: float = H_TOP_DEFAULT_RATIO
+var _top_split_user_set: bool = false
+var _top_split_applying: bool = false
+var _bottom_split_ratio: float = H_BOTTOM_DEFAULT_RATIO
 var _bottom_split_user_set: bool = false
 var _bottom_split_applying: bool = false
 
@@ -78,6 +90,7 @@ func _ready() -> void:
 	else:
 		_use_polling = true
 		_refresh_all()
+	_load_split_ratios()
 	if get_viewport() != null and not get_viewport().size_changed.is_connected(_on_viewport_size_changed):
 		get_viewport().size_changed.connect(_on_viewport_size_changed)
 	if bottom_split != null:
@@ -87,6 +100,13 @@ func _ready() -> void:
 		var size_cb := Callable(self, "_on_bottom_split_resized")
 		if not bottom_split.resized.is_connected(size_cb):
 			bottom_split.resized.connect(size_cb)
+	if top_split != null:
+		var top_dragged_cb := Callable(self, "_on_top_split_dragged")
+		if not top_split.dragged.is_connected(top_dragged_cb):
+			top_split.dragged.connect(top_dragged_cb)
+		var top_size_cb := Callable(self, "_on_top_split_resized")
+		if not top_split.resized.is_connected(top_size_cb):
+			top_split.resized.connect(top_size_cb)
 	if content_split != null:
 		var content_dragged_cb := Callable(self, "_on_content_split_dragged")
 		if not content_split.dragged.is_connected(content_dragged_cb):
@@ -141,6 +161,7 @@ func _ensure_layout_initialized() -> void:
 		return
 	_layout_initialized = true
 	_apply_split_ratio()
+	_apply_top_split_ratio()
 	_apply_bottom_split_ratio()
 
 func _layout_has_sizes() -> bool:
@@ -200,6 +221,7 @@ func _apply_content_layout(use_tabs: bool) -> void:
 	content_split.visible = not use_tabs
 	if not use_tabs:
 		_apply_split_ratio()
+		_apply_top_split_ratio()
 	_apply_bottom_split_ratio()
 
 func _move_to_tabs() -> void:
@@ -237,11 +259,26 @@ func _apply_split_ratio() -> void:
 	if not _layout_initialized and not _content_split_user_set:
 		return
 	var total_height := content_split.size.y
-	var target_ratio := _content_split_ratio if _content_split_user_set else LEDGER_DEFAULT_RATIO
+	var target_ratio := _content_split_ratio if _content_split_user_set else V_DEFAULT_RATIO
 	if not _is_valid_ratio(target_ratio):
 		_content_split_user_set = false
-		target_ratio = LEDGER_DEFAULT_RATIO
+		target_ratio = V_DEFAULT_RATIO
 	_set_content_split_offset_for_ratio(target_ratio, total_height)
+
+func _apply_top_split_ratio() -> void:
+	if top_split == null:
+		return
+	if top_split.size.x <= 0.0:
+		call_deferred("_apply_top_split_ratio")
+		return
+	if not _layout_initialized and not _top_split_user_set:
+		return
+	var total_width := top_split.size.x
+	var target_ratio := _top_split_ratio if _top_split_user_set else H_TOP_DEFAULT_RATIO
+	if not _is_valid_ratio(target_ratio):
+		_top_split_user_set = false
+		target_ratio = H_TOP_DEFAULT_RATIO
+	_set_top_split_offset_for_ratio(target_ratio, total_width)
 
 func _apply_bottom_split_ratio() -> void:
 	if bottom_split == null:
@@ -252,35 +289,50 @@ func _apply_bottom_split_ratio() -> void:
 	if not _layout_initialized and not _bottom_split_user_set:
 		return
 	var total_width := bottom_split.size.x
-	var target_ratio := _bottom_split_ratio if _bottom_split_user_set else BOTTOM_SPLIT_RATIO
+	var target_ratio := _bottom_split_ratio if _bottom_split_user_set else H_BOTTOM_DEFAULT_RATIO
 	if not _is_valid_ratio(target_ratio):
 		_bottom_split_user_set = false
-		target_ratio = BOTTOM_SPLIT_RATIO
+		target_ratio = H_BOTTOM_DEFAULT_RATIO
 	_set_bottom_split_offset_for_ratio(target_ratio, total_width)
 
-func _on_bottom_split_dragged(offset: float) -> void:
+func _on_bottom_split_dragged(drag_offset: float) -> void:
 	if bottom_split == null:
 		return
 	var width: float = maxf(1.0, bottom_split.size.x)
-	_bottom_split_ratio = clampf(0.5 + (float(offset) / width), 0.0, 1.0)
+	_bottom_split_ratio = clampf(0.5 + (float(drag_offset) / width), 0.0, 1.0)
 	_bottom_split_user_set = true
+	_save_split_ratio(UI_SPLIT_BOTTOM_H_RATIO_KEY, _bottom_split_ratio)
 
 func _on_bottom_split_resized() -> void:
 	if _bottom_split_applying:
 		return
 	_apply_bottom_split_ratio()
 
-func _on_content_split_dragged(offset: float) -> void:
+func _on_content_split_dragged(drag_offset: float) -> void:
 	if content_split == null:
 		return
 	var height: float = maxf(1.0, content_split.size.y)
-	_content_split_ratio = clampf(0.5 + (float(offset) / height), 0.0, 1.0)
+	_content_split_ratio = clampf(0.5 + (float(drag_offset) / height), 0.0, 1.0)
 	_content_split_user_set = true
+	_save_split_ratio(UI_SPLIT_V_RATIO_KEY, _content_split_ratio)
 
 func _on_content_split_resized() -> void:
 	if _content_split_applying:
 		return
 	_apply_split_ratio()
+
+func _on_top_split_dragged(drag_offset: float) -> void:
+	if top_split == null:
+		return
+	var width: float = maxf(1.0, top_split.size.x)
+	_top_split_ratio = clampf(0.5 + (float(drag_offset) / width), 0.0, 1.0)
+	_top_split_user_set = true
+	_save_split_ratio(UI_SPLIT_TOP_H_RATIO_KEY, _top_split_ratio)
+
+func _on_top_split_resized() -> void:
+	if _top_split_applying:
+		return
+	_apply_top_split_ratio()
 
 func _set_bottom_split_offset_for_ratio(ratio: float, width: float) -> void:
 	if bottom_split == null or width <= 0.0 or _bottom_split_applying:
@@ -289,6 +341,14 @@ func _set_bottom_split_offset_for_ratio(ratio: float, width: float) -> void:
 	var clamped := clampf(ratio, 0.0, 1.0)
 	bottom_split.split_offset = int(round((clamped - 0.5) * width))
 	_bottom_split_applying = false
+
+func _set_top_split_offset_for_ratio(ratio: float, width: float) -> void:
+	if top_split == null or width <= 0.0 or _top_split_applying:
+		return
+	_top_split_applying = true
+	var clamped := clampf(ratio, 0.0, 1.0)
+	top_split.split_offset = int(round((clamped - 0.5) * width))
+	_top_split_applying = false
 
 func _set_content_split_offset_for_ratio(ratio: float, height: float) -> void:
 	if content_split == null or height <= 0.0 or _content_split_applying:
@@ -300,6 +360,52 @@ func _set_content_split_offset_for_ratio(ratio: float, height: float) -> void:
 
 func _is_valid_ratio(ratio: float) -> bool:
 	return ratio >= 0.0 and ratio <= 1.0
+
+func _load_split_ratios() -> void:
+	var config := ConfigFile.new()
+	var load_err := config.load(UI_LAYOUT_PATH)
+	if load_err != OK:
+		return
+	if not config.has_section_key(UI_LAYOUT_SECTION, UI_LAYOUT_VERSION_KEY):
+		return
+	var version_value: Variant = config.get_value(UI_LAYOUT_SECTION, UI_LAYOUT_VERSION_KEY, 0)
+	var version := int(version_value)
+	if version != UI_LAYOUT_VERSION:
+		return
+	var v_ratio: Variant = _read_ratio(config, UI_SPLIT_V_RATIO_KEY)
+	if v_ratio != null:
+		_content_split_ratio = float(v_ratio)
+		_content_split_user_set = true
+	var top_ratio: Variant = _read_ratio(config, UI_SPLIT_TOP_H_RATIO_KEY)
+	if top_ratio != null:
+		_top_split_ratio = float(top_ratio)
+		_top_split_user_set = true
+	var bottom_ratio: Variant = _read_ratio(config, UI_SPLIT_BOTTOM_H_RATIO_KEY)
+	if bottom_ratio != null:
+		_bottom_split_ratio = float(bottom_ratio)
+		_bottom_split_user_set = true
+
+func _read_ratio(config: ConfigFile, key: String) -> Variant:
+	if not config.has_section_key(UI_LAYOUT_SECTION, key):
+		return null
+	var ratio_value: Variant = config.get_value(UI_LAYOUT_SECTION, key, null)
+	if ratio_value == null:
+		return null
+	var ratio := float(ratio_value)
+	if _is_valid_ratio(ratio):
+		return ratio
+	return null
+
+func _save_split_ratio(key: String, ratio: float) -> void:
+	if not _is_valid_ratio(ratio):
+		return
+	var config := ConfigFile.new()
+	var load_err := config.load(UI_LAYOUT_PATH)
+	if load_err != OK and load_err != ERR_FILE_NOT_FOUND:
+		return
+	config.set_value(UI_LAYOUT_SECTION, UI_LAYOUT_VERSION_KEY, UI_LAYOUT_VERSION)
+	config.set_value(UI_LAYOUT_SECTION, key, ratio)
+	config.save(UI_LAYOUT_PATH)
 
 func _ensure_expedition_tab_titles() -> void:
 	if expedition_tabs == null:
