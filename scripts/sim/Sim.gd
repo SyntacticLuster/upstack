@@ -92,6 +92,12 @@ const PEOPLE_LAST_NAMES: Array[String] = [
 	"Wright", "Singh", "Park", "Reyes"
 ]
 
+const PEOPLE_STATUS_HOME := "home"
+const PEOPLE_STATUS_AWAY := "away"
+const PEOPLE_STATUS_INJURED := "injured"
+const PEOPLE_STATUS_DEAD := "dead"
+const PEOPLE_SYSTEM_VERSION := 1
+
 const RNG_BASE_MULTIPLIER := 73856093
 const RNG_DAY_MULTIPLIER := 19349663
 const RNG_CONTEXT_SEED_MASK := 0x7FFFFFFFFFFFFFFF
@@ -458,6 +464,8 @@ var conversion_burn_counts: Dictionary = {}
 var pending_conversions: Array[Dictionary] = []
 var _people: Array[Dictionary] = []
 var _next_person_id: int = 1
+var people_system_version: int = PEOPLE_SYSTEM_VERSION
+var pending_outsider_identities: Dictionary = {}
 
 func _ready() -> void:
 	_setup_default_state()
@@ -530,14 +538,18 @@ func _setup_default_state() -> void:
 func _reset_people_state(initial_population: int) -> void:
 	_people.clear()
 	_next_person_id = 1
-	_sync_people_to_population(max(initial_population, 0))
+	people_system_version = PEOPLE_SYSTEM_VERSION
+	_sync_people_to_population(max(initial_population, 0), "init", day)
 
-func _sync_people_to_population(target_population: int) -> void:
+func _sync_people_to_population(target_population: int, cause: String, event_day: int) -> void:
 	var target: int = max(target_population, 0)
-	if _people.size() < target:
-		_add_people(target - _people.size())
-	elif _people.size() > target:
-		_trim_people_to_population(target)
+	var alive_count: int = _alive_people_count()
+	if alive_count < target:
+		_add_people(target - alive_count, event_day, PEOPLE_STATUS_HOME)
+		return
+	if alive_count > target:
+		var loss: int = alive_count - target
+		_kill_people(loss, cause, event_day, false)
 
 func _trim_people_to_population(target_population: int) -> void:
 	var target: int = max(target_population, 0)
@@ -545,25 +557,313 @@ func _trim_people_to_population(target_population: int) -> void:
 		_people.pop_back()
 	_next_person_id = max(_next_person_id, _people.size() + 1)
 
-func _add_people(count: int) -> void:
+func _add_people(count: int, joined_day: int, status: String) -> Array[int]:
 	var safe_count: int = max(count, 0)
+	var ids: Array[int] = []
+	var safe_joined_day: int = joined_day
+	if safe_joined_day < 0:
+		safe_joined_day = day
+	var safe_status: String = status if status != "" else PEOPLE_STATUS_HOME
 	for _i in range(safe_count):
 		var person_id := _next_person_id
 		_next_person_id += 1
-		_people.append(_make_person(person_id))
+		_people.append(_make_person(person_id, safe_joined_day, safe_status))
+		ids.append(person_id)
+	return ids
 
-func _make_person(person_id: int) -> Dictionary:
+func _make_person(person_id: int, joined_day: int, status: String) -> Dictionary:
 	var index: int = max(person_id - 1, 0)
 	var first_idx := int(index % PEOPLE_FIRST_NAMES.size())
 	var last_idx: int = int(floor(float(index) / float(PEOPLE_FIRST_NAMES.size()))) % PEOPLE_LAST_NAMES.size()
 	var first := PEOPLE_FIRST_NAMES[first_idx]
 	var last := PEOPLE_LAST_NAMES[last_idx]
+	var generation: int = int(floor(float(index) / float(PEOPLE_FIRST_NAMES.size() * PEOPLE_LAST_NAMES.size())))
+	var full_name := "%s %s" % [first, last]
+	if generation > 0:
+		full_name = "%s %s (%d)" % [first, last, generation + 1]
 	return {
 		"id": person_id,
 		"first": first,
 		"last": last,
-		"name": "%s %s" % [first, last],
+		"name": full_name,
+		"status": status,
+		"joined_day": joined_day,
+		"death_day": -1,
+		"death_cause": "",
 	}
+
+func _alive_people_count() -> int:
+	var count: int = 0
+	for entry in _people:
+		if not (entry is Dictionary):
+			continue
+		var status: String = str((entry as Dictionary).get("status", PEOPLE_STATUS_HOME))
+		if status != PEOPLE_STATUS_DEAD:
+			count += 1
+	return count
+
+func _find_person_index_by_id(person_id: int) -> int:
+	if person_id <= 0:
+		return -1
+	for i in range(_people.size()):
+		var entry: Variant = _people[i]
+		if entry is Dictionary and int((entry as Dictionary).get("id", 0)) == person_id:
+			return i
+	return -1
+
+func _insert_person_sorted(person: Dictionary) -> void:
+	var person_id: int = int(person.get("id", 0))
+	if person_id <= 0:
+		return
+	if _people.is_empty():
+		_people.append(person)
+		return
+	var insert_idx: int = _people.size()
+	for i in range(_people.size()):
+		var entry: Variant = _people[i]
+		if entry is Dictionary and int((entry as Dictionary).get("id", 0)) > person_id:
+			insert_idx = i
+			break
+	_people.insert(insert_idx, person)
+
+func _home_people_ids_sorted() -> Array[int]:
+	var ids: Array[int] = []
+	for entry in _people:
+		if not (entry is Dictionary):
+			continue
+		var person: Dictionary = entry as Dictionary
+		var status: String = str(person.get("status", PEOPLE_STATUS_HOME))
+		if status == PEOPLE_STATUS_HOME:
+			ids.append(int(person.get("id", 0)))
+	return ids
+
+func _home_people_count() -> int:
+	return _home_people_ids_sorted().size()
+
+func _select_home_people(count: int) -> Array[int]:
+	var requested: int = max(count, 0)
+	if requested <= 0:
+		return []
+	var home_ids := _home_people_ids_sorted()
+	var selected: Array[int] = []
+	var limit: int = min(requested, home_ids.size())
+	for i in range(limit):
+		selected.append(home_ids[i])
+	return selected
+
+func _set_people_status(ids: Array[int], status: String) -> void:
+	if ids.is_empty():
+		return
+	for person_id in ids:
+		var idx := _find_person_index_by_id(int(person_id))
+		if idx < 0:
+			continue
+		var entry: Variant = _people[idx]
+		if entry is Dictionary:
+			(entry as Dictionary)["status"] = status
+
+func _select_casualty_ids(count: int) -> Array[int]:
+	var requested: int = max(count, 0)
+	if requested <= 0:
+		return []
+	var home_ids := _home_people_ids_sorted()
+	home_ids.reverse()
+	var away_ids: Array[int] = []
+	var injured_ids: Array[int] = []
+	for entry in _people:
+		if not (entry is Dictionary):
+			continue
+		var person: Dictionary = entry as Dictionary
+		var status: String = str(person.get("status", PEOPLE_STATUS_HOME))
+		var person_id: int = int(person.get("id", 0))
+		if status == PEOPLE_STATUS_AWAY:
+			away_ids.append(person_id)
+		elif status == PEOPLE_STATUS_INJURED:
+			injured_ids.append(person_id)
+	away_ids.reverse()
+	injured_ids.reverse()
+	var pool: Array[int] = []
+	pool.append_array(home_ids)
+	pool.append_array(away_ids)
+	pool.append_array(injured_ids)
+	var selected: Array[int] = []
+	var limit: int = min(requested, pool.size())
+	for i in range(limit):
+		selected.append(pool[i])
+	return selected
+
+func _kill_people(count: int, cause: String, event_day: int, emit_event: bool) -> Array[int]:
+	var ids := _select_casualty_ids(count)
+	if ids.is_empty():
+		return []
+	for person_id in ids:
+		var idx := _find_person_index_by_id(int(person_id))
+		if idx < 0:
+			continue
+		var entry: Variant = _people[idx]
+		if entry is Dictionary:
+			var person: Dictionary = entry as Dictionary
+			person["status"] = PEOPLE_STATUS_DEAD
+			person["death_day"] = event_day
+			person["death_cause"] = cause
+	if emit_event:
+		var names := _names_for_ids(ids)
+		var message := "%d lost: %s." % [ids.size(), _format_names_list(names)]
+		_emit_event(
+			"POPULATION_CASUALTIES",
+			message,
+			"warn",
+			"player_feed",
+			{
+				"count": ids.size(),
+				"cause": cause,
+				"ids": ids,
+				"names": names,
+			},
+			"population",
+			event_day,
+			hour_of_day,
+			true
+		)
+	return ids
+
+func _kill_people_by_ids(ids: Array[int], cause: String, event_day: int) -> void:
+	if ids.is_empty():
+		return
+	for person_id in ids:
+		var idx := _find_person_index_by_id(int(person_id))
+		if idx < 0:
+			continue
+		var entry: Variant = _people[idx]
+		if entry is Dictionary:
+			var person: Dictionary = entry as Dictionary
+			person["status"] = PEOPLE_STATUS_DEAD
+			person["death_day"] = event_day
+			person["death_cause"] = cause
+
+func _apply_population_loss(loss_count: int, cause: String, event_day: int, event_type: String, message_prefix: String) -> Array[int]:
+	if res == null:
+		return []
+	var count: int = max(loss_count, 0)
+	if count <= 0:
+		return []
+	_ensure_people_initialized()
+	var ids := _select_casualty_ids(count)
+	if ids.is_empty():
+		return []
+	res.population = max(res.population - ids.size(), 0)
+	_kill_people_by_ids(ids, cause, event_day)
+	var names := _names_for_ids(ids)
+	var message := "%s %s" % [message_prefix, _format_names_list(names)]
+	_emit_event(
+		event_type,
+		message,
+		"warn",
+		"player_feed",
+		{
+			"count": ids.size(),
+			"cause": cause,
+			"ids": ids,
+			"names": names,
+		},
+		"population",
+		event_day,
+		hour_of_day,
+		true
+	)
+	return ids
+
+func _names_for_ids(ids: Array[int]) -> Array[String]:
+	var names: Array[String] = []
+	for person_id in ids:
+		var idx := _find_person_index_by_id(int(person_id))
+		if idx < 0:
+			names.append(_person_name_for_id(int(person_id)))
+			continue
+		var entry: Variant = _people[idx]
+		if entry is Dictionary:
+			names.append(str((entry as Dictionary).get("name", _person_name_for_id(int(person_id)))))
+	return names
+
+func _person_name_for_id(person_id: int) -> String:
+	var index: int = max(person_id - 1, 0)
+	var first_idx := int(index % PEOPLE_FIRST_NAMES.size())
+	var last_idx: int = int(floor(float(index) / float(PEOPLE_FIRST_NAMES.size()))) % PEOPLE_LAST_NAMES.size()
+	var first := PEOPLE_FIRST_NAMES[first_idx]
+	var last := PEOPLE_LAST_NAMES[last_idx]
+	var generation: int = int(floor(float(index) / float(PEOPLE_FIRST_NAMES.size() * PEOPLE_LAST_NAMES.size())))
+	if generation > 0:
+		return "%s %s (%d)" % [first, last, generation + 1]
+	return "%s %s" % [first, last]
+
+func _format_names_list(names: Array[String]) -> String:
+	if names.is_empty():
+		return "none"
+	if names.size() <= 3:
+		return ", ".join(names)
+	return "%s, %s, and %d others" % [names[0], names[1], names.size() - 2]
+
+func _ensure_people_initialized() -> void:
+	if not _people.is_empty():
+		for i in range(_people.size()):
+			var entry: Variant = _people[i]
+			if not (entry is Dictionary):
+				continue
+			var person: Dictionary = entry as Dictionary
+			if not person.has("status"):
+				person["status"] = PEOPLE_STATUS_HOME
+			if not person.has("joined_day"):
+				person["joined_day"] = day
+			if not person.has("death_day"):
+				person["death_day"] = -1
+			if not person.has("death_cause"):
+				person["death_cause"] = ""
+			if not person.has("name"):
+				var person_id: int = int(person.get("id", 0))
+				person["name"] = _person_name_for_id(person_id)
+		people_system_version = PEOPLE_SYSTEM_VERSION
+		return
+	if res == null:
+		return
+	var population: int = max(int(res.population), 0)
+	if population <= 0:
+		return
+	_reset_people_state(population)
+
+func _reserve_outsider_identities(group_size: int, joined_day: int) -> Array[Dictionary]:
+	var identities: Array[Dictionary] = []
+	var count: int = max(group_size, 0)
+	for _i in range(count):
+		var person_id := _next_person_id
+		_next_person_id += 1
+		var record := _make_person(person_id, joined_day, "pending")
+		identities.append(record)
+	return identities
+
+func _ids_from_identities(identities: Array[Dictionary]) -> Array[int]:
+	var ids: Array[int] = []
+	for identity in identities:
+		ids.append(int(identity.get("id", 0)))
+	return ids
+
+func _names_from_identities(identities: Array[Dictionary]) -> Array[String]:
+	var names: Array[String] = []
+	for identity in identities:
+		names.append(str(identity.get("name", "")))
+	return names
+
+func _add_reserved_people(identities: Array[Dictionary], joined_day: int) -> Array[int]:
+	var added_ids: Array[int] = []
+	for identity in identities:
+		var person_id: int = int(identity.get("id", 0))
+		if person_id <= 0:
+			continue
+		if _find_person_index_by_id(person_id) >= 0:
+			continue
+		var person := _make_person(person_id, joined_day, PEOPLE_STATUS_HOME)
+		_insert_person_sorted(person)
+		added_ids.append(person_id)
+	return added_ids
 
 func _current_housing_capacity() -> int:
 	if tower == null or db == null:
@@ -619,7 +919,7 @@ func _apply_expedition_survivors(survivors_gained: int) -> void:
 		return
 	var population_before := res.population
 	res.population += survivors_gained
-	_add_people(survivors_gained)
+	_add_people(survivors_gained, day, PEOPLE_STATUS_HOME)
 	active_expedition["survivors_gained"] = survivors_gained
 	_apply_overcrowding_penalty(population_before)
 
@@ -662,6 +962,9 @@ func _current_away_crew() -> int:
 	var state := str(active_expedition.get("state", ""))
 	if state == EXPEDITION_STATE_RESOLVED or state == EXPEDITION_STATE_FAILED:
 		return 0
+	var member_ids := _expedition_member_ids(active_expedition)
+	if not member_ids.is_empty():
+		return maxi(member_ids.size(), 0)
 	var party_size: int = int(active_expedition.get("party_size", 0))
 	if party_size <= 0:
 		party_size = int(active_expedition.get("crew", 0))
@@ -682,7 +985,7 @@ func _max_party_size(total_population: int) -> int:
 	var cap_by_rule: int = max_by_pop
 	if cap_by_rule > 10:
 		cap_by_rule = 10
-	return maxi(1, cap_by_rule)
+	return maxi(1, min(cap_by_rule, safe_total))
 
 func _party_size_multiplier(party_size: int) -> float:
 	if party_size <= 4:
@@ -698,6 +1001,27 @@ func _expedition_party_size(expedition: Dictionary) -> int:
 	if party_size <= 0:
 		party_size = int(expedition.get("crew", 0))
 	return maxi(party_size, 0)
+
+func _expedition_member_ids(expedition: Dictionary) -> Array[int]:
+	var ids: Array[int] = []
+	if expedition == null or expedition.is_empty():
+		return ids
+	var raw: Variant = expedition.get("member_ids", [])
+	if raw is Array:
+		for entry in raw:
+			ids.append(int(entry))
+	return ids
+
+func _select_casualties_from_members(member_ids: Array[int], count: int) -> Array[int]:
+	var requested: int = max(count, 0)
+	if requested <= 0 or member_ids.is_empty():
+		return []
+	var selected: Array[int] = []
+	var idx: int = member_ids.size() - 1
+	while idx >= 0 and selected.size() < requested:
+		selected.append(int(member_ids[idx]))
+		idx -= 1
+	return selected
 
 func _get_location_heat(location_id: String) -> int:
 	if location_id == "":
@@ -861,6 +1185,7 @@ func _reset_policies_and_pools() -> void:
 	_update_lever_hourly_states()
 
 func _begin_day(sim_day: int) -> void:
+	_ensure_people_initialized()
 	production_executed_today = false
 	_decay_location_heat()
 	if rejected_outsiders_days_left > 0:
@@ -2464,12 +2789,19 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		# Fallback to legacy "target" for backward compatibility during transition.
 		destination_id = str(payload.get("target", ""))
 
+	_ensure_people_initialized()
+
 	var requested_party_size: int = int(payload.get("party_size", payload.get("crew", 1)))
-	var max_party_size: int = _max_party_size(int(sim_res.population))
+	var home_count: int = _home_people_count()
+	if home_count <= 0:
+		home_count = int(sim_res.population)
+	var max_party_size: int = _max_party_size(home_count)
 	if max_party_size <= 0:
 		_obs_push(obs, "EXPEDITION_ABORT@NO_CREW")
 		return
 	var party_size: int = clampi(requested_party_size, 1, max_party_size)
+	if party_size < requested_party_size:
+		_obs_push(obs, "EXPEDITION_CREW_REDUCED@%d->%d" % [requested_party_size, party_size])
 	var crew: int = party_size
 	_obs_push(obs, "CMD:EXPEDITION@%s" % destination_id)
 
@@ -2599,12 +2931,27 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 	var base_payload := entry.duplicate(true)
 	base_payload["decision"] = "accept" if accept else "reject"
 	base_payload["event_id"] = event_id
+	_ensure_people_initialized()
+	var identities: Array[Dictionary] = []
+	if pending_outsider_identities.has(event_id):
+		var identity_value: Variant = pending_outsider_identities.get(event_id, [])
+		if identity_value is Array:
+			identities = identity_value
+	if identities.is_empty() and group_size > 0:
+		identities = _reserve_outsider_identities(group_size, sim_day)
+	if not identities.is_empty():
+		group_size = identities.size()
+	var outsider_ids := _ids_from_identities(identities)
+	var outsider_names := _names_from_identities(identities)
+	base_payload["outsider_ids"] = outsider_ids
+	base_payload["outsider_names"] = outsider_names
 
 	if accept:
 		var population_before := sim_res.population
+		var added_ids: Array[int] = []
 		if group_size > 0:
 			sim_res.population += group_size
-			_add_people(group_size)
+			added_ids = _add_reserved_people(identities, sim_day)
 		var food_cost: int = 2 * group_size
 		var water_cost: int = 2 * group_size
 		sim_res.food = maxi(sim_res.food - food_cost, 0)
@@ -2618,9 +2965,14 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 		base_payload["water_cost"] = water_cost
 		base_payload["attention_gain"] = attention_gain
 		base_payload["morale_delta"] = 1
+		base_payload["admitted_ids"] = added_ids
+		base_payload["admitted_names"] = _names_for_ids(added_ids)
 		_emit_event(
 			"OUTSIDERS_ACCEPTED",
-			"Outsiders admitted: +%d population." % group_size,
+			"Outsiders admitted: %s. Population +%d." % [
+				_format_names_list(outsider_names),
+				group_size,
+			],
 			"info",
 			"player_feed",
 			base_payload,
@@ -2637,9 +2989,10 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 		base_payload["attention_gain"] = 1
 		base_payload["morale_delta"] = -2
 		base_payload["rejected_days"] = OUTSIDERS_DECISION_DAYS
+		base_payload["rejected_names"] = outsider_names
 		_emit_event(
 			"OUTSIDERS_REJECTED",
-			"Outsiders turned away. Rumors spread.",
+			"Outsiders turned away: %s. Rumors spread." % _format_names_list(outsider_names),
 			"warn",
 			"player_feed",
 			base_payload,
@@ -2649,6 +3002,7 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 			true
 		)
 
+	pending_outsider_identities.erase(event_id)
 	pending_outsiders.erase(event_id)
 
 
@@ -2700,6 +3054,17 @@ func launch_expedition(destination_id: String, crew: int, party_size: int = -1) 
 		return result
 	var clamped_crew: int = clamped_party_size
 
+	_ensure_people_initialized()
+	var member_ids: Array[int] = _select_home_people(clamped_party_size)
+	if member_ids.is_empty():
+		result["message"] = "No crew available."
+		return result
+	if member_ids.size() < clamped_party_size:
+		clamped_party_size = member_ids.size()
+		clamped_crew = clamped_party_size
+	_set_people_status(member_ids, PEOPLE_STATUS_AWAY)
+	var member_names: Array[String] = _names_for_ids(member_ids)
+
 	# Create expedition.
 	expedition_id_counter += 1
 	var exp_id := expedition_id_counter
@@ -2712,6 +3077,8 @@ func launch_expedition(destination_id: String, crew: int, party_size: int = -1) 
 		"destination_name": location.name,
 		"crew": clamped_crew,
 		"party_size": clamped_party_size,
+		"member_ids": member_ids.duplicate(),
+		"member_names": member_names.duplicate(),
 		"state": EXPEDITION_STATE_PLANNED,
 		"yield_version": EXPEDITION_YIELD_VERSION_V2,
 		"start_day": day,
@@ -2740,7 +3107,7 @@ func launch_expedition(destination_id: String, crew: int, party_size: int = -1) 
 	# Emit launch event.
 	_emit_expedition_event(
 		"EXPEDITION_LAUNCHED",
-		"Expedition launched to %s with %d crew." % [location.name, clamped_crew],
+		"Expedition launched to %s. Crew: %s." % [location.name, _format_names_list(member_names)],
 		"info",
 		active_expedition.duplicate(true)
 	)
@@ -3114,6 +3481,19 @@ func _expedition_apply_onsite_outcome() -> void:
 
 	var injury_result: Dictionary = _roll_expedition_injury(risk_level, crew, injury_tracker)
 	var crew_lost: int = int(injury_result.get("crew_lost", 0))
+	var member_ids := _expedition_member_ids(active_expedition)
+	var injured_id: int = -1
+	if bool(injury_result.get("injury", false)) and not member_ids.is_empty():
+		if bool(injury_result.get("fatal", false)):
+			injured_id = int(member_ids[member_ids.size() - 1])
+		else:
+			injured_id = int(member_ids[0])
+		if injured_id > 0:
+			active_expedition["injured_id"] = injured_id
+			active_expedition["injured_name"] = _person_name_for_id(injured_id)
+			if bool(injury_result.get("fatal", false)):
+				active_expedition["fatality_id"] = injured_id
+				active_expedition["fatality_name"] = _person_name_for_id(injured_id)
 	if crew_lost > 0:
 		active_expedition["crew_lost"] = crew_lost
 		active_expedition["crew"] = max(crew - crew_lost, 0)
@@ -3151,9 +3531,15 @@ func _expedition_apply_onsite_outcome() -> void:
 	if bool(injury_result.get("injury", false)):
 		var injury_message := "Expedition reported an injury."
 		var injury_event := "EXPEDITION_INJURY"
+		var injury_name := str(active_expedition.get("injured_name", ""))
 		if bool(injury_result.get("fatal", false)):
-			injury_message = "Expedition reported a fatality."
 			injury_event = "EXPEDITION_FATALITY"
+			if injury_name != "":
+				injury_message = "%s did not survive the expedition." % injury_name
+			else:
+				injury_message = "Expedition reported a fatality."
+		elif injury_name != "":
+			injury_message = "%s was injured during the expedition." % injury_name
 		_emit_expedition_event(
 			injury_event,
 			injury_message,
@@ -3197,9 +3583,18 @@ func _expedition_apply_onsite_outcome_v1() -> void:
 		if casualty_roll < 0.3 and crew > 1:
 			active_expedition["crew_lost"] = 1
 			active_expedition["crew"] = crew - 1
+			var member_ids := _expedition_member_ids(active_expedition)
+			if not member_ids.is_empty():
+				var fatality_id: int = int(member_ids[member_ids.size() - 1])
+				active_expedition["fatality_id"] = fatality_id
+				active_expedition["fatality_name"] = _person_name_for_id(fatality_id)
+			var casualty_name := str(active_expedition.get("fatality_name", ""))
+			var casualty_message := "Expedition suffered a casualty."
+			if casualty_name != "":
+				casualty_message = "%s did not survive the expedition." % casualty_name
 			_emit_expedition_event(
 				"EXPEDITION_CASUALTY",
-				"Expedition suffered a casualty.",
+				casualty_message,
 				"warn",
 				active_expedition.duplicate(true)
 			)
@@ -3221,6 +3616,8 @@ func _expedition_resolve() -> void:
 	var _crew := int(active_expedition.get("crew", 0))
 	var crew_lost := int(active_expedition.get("crew_lost", 0))
 	var expedition_id := int(active_expedition.get("id", 0))
+	var member_ids: Array[int] = _expedition_member_ids(active_expedition)
+	var member_names: Array[String] = _names_for_ids(member_ids)
 	var survivors_gained := _roll_expedition_survivors(expedition_id)
 	var yields: Dictionary = {}
 	var yields_variant: Variant = active_expedition.get("yields", {})
@@ -3244,9 +3641,31 @@ func _expedition_resolve() -> void:
 		if fatigue_penalty > 0:
 			res.morale -= fatigue_penalty
 
+		var fatality_id: int = int(active_expedition.get("fatality_id", -1))
+		var injured_id: int = int(active_expedition.get("injured_id", -1))
+		var casualty_ids: Array[int] = []
 		if crew_lost > 0:
-			res.population = max(res.population - crew_lost, 0)
-			_sync_people_to_population(res.population)
+			if fatality_id > 0 and member_ids.has(fatality_id):
+				casualty_ids.append(fatality_id)
+			else:
+				casualty_ids = _select_casualties_from_members(member_ids, crew_lost)
+		if not casualty_ids.is_empty():
+			_kill_people_by_ids(casualty_ids, "expedition_fatality", day)
+			res.population = max(res.population - casualty_ids.size(), 0)
+
+		var survivors_ids: Array[int] = []
+		var injured_ids: Array[int] = []
+		for person_id in member_ids:
+			if casualty_ids.has(person_id):
+				continue
+			if injured_id == int(person_id) and not bool(active_expedition.get("fatality", false)):
+				injured_ids.append(int(person_id))
+				continue
+			survivors_ids.append(int(person_id))
+		if not survivors_ids.is_empty():
+			_set_people_status(survivors_ids, PEOPLE_STATUS_HOME)
+		if not injured_ids.is_empty():
+			_set_people_status(injured_ids, PEOPLE_STATUS_INJURED)
 
 		_apply_expedition_survivors(survivors_gained)
 
@@ -3283,6 +3702,8 @@ func _expedition_resolve() -> void:
 			yield_summary,
 			outcome_tone.capitalize()
 		]
+		if not member_names.is_empty():
+			message += "\nCrew returned: %s" % _format_names_list(_names_for_ids(survivors_ids))
 		if cost_parts.size() > 0:
 			message += "\nCosts: %s" % ", ".join(cost_parts)
 		if survivors_gained > 0:
@@ -3300,6 +3721,14 @@ func _expedition_resolve() -> void:
 			"crew_lost": crew_lost,
 		}
 		payload["outcome_tone"] = outcome_tone
+		payload["member_ids"] = member_ids.duplicate()
+		payload["member_names"] = member_names.duplicate()
+		payload["survivor_ids"] = survivors_ids.duplicate()
+		payload["survivor_names"] = _names_for_ids(survivors_ids)
+		payload["casualty_ids"] = casualty_ids.duplicate()
+		payload["casualty_names"] = _names_for_ids(casualty_ids)
+		payload["injured_ids"] = injured_ids.duplicate()
+		payload["injured_names"] = _names_for_ids(injured_ids)
 
 		_emit_expedition_event(
 			"EXPEDITION_RESOLVED",
@@ -3326,9 +3755,23 @@ func _expedition_resolve() -> void:
 						res.materials += amount
 				yield_summary_parts.append("%s +%d" % [key, amount])
 
+		var fatality_id_legacy: int = int(active_expedition.get("fatality_id", -1))
+		var casualty_ids_legacy: Array[int] = []
 		if crew_lost > 0:
-			res.population = max(res.population - crew_lost, 0)
-			_sync_people_to_population(res.population)
+			if fatality_id_legacy > 0 and member_ids.has(fatality_id_legacy):
+				casualty_ids_legacy.append(fatality_id_legacy)
+			else:
+				casualty_ids_legacy = _select_casualties_from_members(member_ids, crew_lost)
+		if not casualty_ids_legacy.is_empty():
+			_kill_people_by_ids(casualty_ids_legacy, "expedition_fatality", day)
+			res.population = max(res.population - casualty_ids_legacy.size(), 0)
+
+		var survivors_ids_legacy: Array[int] = []
+		for person_id in member_ids:
+			if not casualty_ids_legacy.has(person_id):
+				survivors_ids_legacy.append(int(person_id))
+		if not survivors_ids_legacy.is_empty():
+			_set_people_status(survivors_ids_legacy, PEOPLE_STATUS_HOME)
 
 		_apply_expedition_survivors(survivors_gained)
 
@@ -3336,16 +3779,25 @@ func _expedition_resolve() -> void:
 
 		var legacy_summary := ", ".join(yield_summary_parts) if not yield_summary_parts.is_empty() else "nothing"
 		var legacy_message := "Expedition returned from %s. Yielded: %s." % [dest_name, legacy_summary]
+		if not member_names.is_empty():
+			legacy_message += " Crew returned: %s." % _format_names_list(_names_for_ids(survivors_ids_legacy))
 		if crew_lost > 0:
 			legacy_message += " Lost %d crew." % crew_lost
 		if survivors_gained > 0:
 			legacy_message += " Survivors: +%d." % survivors_gained
 
+		var legacy_payload := active_expedition.duplicate(true)
+		legacy_payload["member_ids"] = member_ids.duplicate()
+		legacy_payload["member_names"] = member_names.duplicate()
+		legacy_payload["survivor_ids"] = survivors_ids_legacy.duplicate()
+		legacy_payload["survivor_names"] = _names_for_ids(survivors_ids_legacy)
+		legacy_payload["casualty_ids"] = casualty_ids_legacy.duplicate()
+		legacy_payload["casualty_names"] = _names_for_ids(casualty_ids_legacy)
 		_emit_expedition_event(
 			"EXPEDITION_RESOLVED",
 			legacy_message,
 			"info",
-			active_expedition.duplicate(true)
+			legacy_payload
 		)
 
 	# Mark as resolved.
@@ -3362,6 +3814,7 @@ func _maybe_queue_outsiders_event() -> void:
 		return
 	if active_expedition.is_empty():
 		return
+	_ensure_people_initialized()
 	var expedition_id: int = int(active_expedition.get("id", 0))
 	var destination_id: String = str(active_expedition.get("destination_id", ""))
 	if destination_id == "":
@@ -3395,9 +3848,19 @@ func _maybe_queue_outsiders_event() -> void:
 		"party_size": party_size,
 		"heat": heat,
 	}
+	var identities := _reserve_outsider_identities(group_size, day)
+	var outsider_ids := _ids_from_identities(identities)
+	var outsider_names := _names_from_identities(identities)
+	pending_outsider_identities[expedition_id] = identities
+	entry["outsider_ids"] = outsider_ids
+	entry["outsider_names"] = outsider_names
 	pending_outsiders[expedition_id] = entry
 	var dest_name: String = str(active_expedition.get("destination_name", "unknown"))
-	var message := "Outsiders at the gate: %d from %s await a decision." % [group_size, dest_name]
+	var message := "Outsiders at the gate: %d from %s. %s" % [
+		group_size,
+		dest_name,
+		_format_names_list(outsider_names)
+	]
 	_emit_event(
 		"OUTSIDERS_AT_GATE",
 		message,
@@ -3472,7 +3935,10 @@ func queue_outsiders_decision(event_id: int, accept: bool) -> Dictionary:
 func get_max_party_size() -> int:
 	if res == null:
 		return 1
-	return _max_party_size(int(res.population))
+	var home_count: int = _home_people_count()
+	if home_count <= 0:
+		home_count = int(res.population)
+	return _max_party_size(home_count)
 
 
 func _log_trade_event(sim_day: int, message: String, severity: String, payload: Dictionary) -> void:
@@ -4197,9 +4663,8 @@ func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String
 		pop_loss += 1
 
 	if pop_loss > 0:
-		sim_res.population = max(sim_res.population - pop_loss, 0)
+		_apply_population_loss(pop_loss, "scarcity", day, "POPULATION_LOSS", "Population loss:")
 		_obs_push(obs, "POP_LOSS@%d" % pop_loss)
-		_sync_people_to_population(sim_res.population)
 
 	sim_res.clamp_all()
 
@@ -4259,7 +4724,7 @@ func _run_civil_unrest_daily(sim_day: int, sim_tower: Tower, sim_db: ModuleDB, o
 			true
 		)
 
-func _run_civil_unrest_terminal(sim_day: int, sim_res: Resources, obs: Array[String]) -> void:
+func _run_civil_unrest_terminal(sim_day: int, _sim_res: Resources, obs: Array[String]) -> void:
 	if not unrest_active:
 		return
 	var unrest_days := int(floor(float(unrest_hours) / float(HOURS_PER_DAY)))
@@ -4272,8 +4737,8 @@ func _run_civil_unrest_terminal(sim_day: int, sim_res: Resources, obs: Array[Str
 	var outcome_roll := float(_daily_rolls.get("unrest_terminal_outcome_roll", 0.0))
 	var outcome := EXIT_MUTINY if outcome_roll < 0.5 else EXIT_EXILE
 	exit_reason = outcome
-	sim_res.population = 0
-	_sync_people_to_population(sim_res.population)
+	var alive_count: int = _alive_people_count()
+	_apply_population_loss(alive_count, "civil_unrest_terminal", sim_day, "CIVIL_UNREST_CASUALTIES", "Civil unrest casualties:")
 	var payload := {
 		"unrest_days": unrest_days,
 		"roll": terminal_roll,
@@ -4300,10 +4765,9 @@ func _apply_unrest_pop_loss(obs: Array[String]) -> void:
 	if CIVIL_UNREST_POP_LOSS_DEFAULT <= 0:
 		return
 	var before_pop := res.population
-	res.population = max(res.population - CIVIL_UNREST_POP_LOSS_DEFAULT, 0)
-	if res.population < before_pop:
+	if before_pop > 0:
+		_apply_population_loss(CIVIL_UNREST_POP_LOSS_DEFAULT, "civil_unrest", day, "CIVIL_UNREST_POP_LOSS", "Civil unrest claimed:")
 		_obs_push(obs, "UNREST_POP_LOSS@%d" % CIVIL_UNREST_POP_LOSS_DEFAULT)
-		_sync_people_to_population(res.population)
 
 func _apply_unrest_module_sabotage(sim_tower: Tower, sim_db: ModuleDB, obs: Array[String]) -> Dictionary:
 	if sim_tower == null or sim_db == null:
@@ -4476,6 +4940,54 @@ func _format_log_line(_day: int, _seed: int, _res: Resources, incidents: Array[S
 		_res.snapshot(),
 	]
 
+func _hash_mix(acc: int, value: int) -> int:
+	return int(((acc * 31) + value) & 0x7FFFFFFF)
+
+func _hash_string(value: String) -> int:
+	var acc: int = 0
+	for i in range(value.length()):
+		acc = _hash_mix(acc, value.unicode_at(i))
+	return acc
+
+func _people_hash_component() -> int:
+	var acc: int = 17
+	for entry in _people:
+		if not (entry is Dictionary):
+			continue
+		var person: Dictionary = entry as Dictionary
+		acc = _hash_mix(acc, int(person.get("id", 0)))
+		acc = _hash_mix(acc, _hash_string(str(person.get("name", ""))))
+		acc = _hash_mix(acc, _hash_string(str(person.get("status", PEOPLE_STATUS_HOME))))
+		acc = _hash_mix(acc, int(person.get("joined_day", 0)))
+		acc = _hash_mix(acc, int(person.get("death_day", -1)))
+		acc = _hash_mix(acc, _hash_string(str(person.get("death_cause", ""))))
+	acc = _hash_mix(acc, _next_person_id)
+	return acc
+
+func _pending_outsider_identities_hash_component() -> int:
+	var acc: int = 23
+	if pending_outsider_identities.is_empty():
+		return acc
+	var keys := pending_outsider_identities.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		acc = _hash_mix(acc, _hash_string(str(key)))
+		var identity_value: Variant = pending_outsider_identities.get(key, [])
+		if identity_value is Array:
+			var identity_entries: Array[Dictionary] = []
+			for entry in identity_value:
+				if entry is Dictionary:
+					identity_entries.append(entry)
+			identity_entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+				return int(a.get("id", 0)) < int(b.get("id", 0))
+			)
+			for identity in identity_entries:
+				acc = _hash_mix(acc, int(identity.get("id", 0)))
+				acc = _hash_mix(acc, _hash_string(str(identity.get("name", ""))))
+	return acc
+
 func _state_signature() -> String:
 	var parts: Array[String] = []
 	parts.append("day=%d" % day)
@@ -4490,12 +5002,21 @@ func _state_signature() -> String:
 	parts.append("ration_scar=%.2f" % snapped(ration_scar, SIM_FLOAT_SNAP))
 	parts.append("labor_scar=%.2f" % snapped(labor_scar, SIM_FLOAT_SNAP))
 	parts.append("conversion_scar=%d" % conversion_scar)
+	parts.append("people_ver=%d" % people_system_version)
+	parts.append("people_hash=%d" % _people_hash_component())
+	parts.append("pending_outsider_hash=%d" % _pending_outsider_identities_hash_component())
 	# Active expedition state for determinism tracking.
 	if not active_expedition.is_empty():
 		parts.append("active_exp_id=%d" % int(active_expedition.get("id", 0)))
 		parts.append("active_exp_state=%s" % str(active_expedition.get("state", "")))
 		parts.append("active_exp_dest=%s" % str(active_expedition.get("destination_id", "")))
 		parts.append("active_exp_hours=%d" % int(active_expedition.get("hours_in_state", 0)))
+		var exp_member_ids := _expedition_member_ids(active_expedition)
+		if not exp_member_ids.is_empty():
+			var member_tokens: Array[String] = []
+			for member_id in exp_member_ids:
+				member_tokens.append(str(member_id))
+			parts.append("active_exp_members=%s" % ",".join(member_tokens))
 	parts.append("rejected_outsiders_days=%d" % rejected_outsiders_days_left)
 	if not location_heat.is_empty():
 		var heat_keys := location_heat.keys()

@@ -56,6 +56,9 @@ func _ready() -> void:
 	collapse_button.pressed.connect(_on_collapse_pressed)
 	modules_roster.connect("item_selected", Callable(self, "_on_module_selected"))
 	modules_roster.select_mode = ItemList.SELECT_SINGLE
+	collapsed_preview.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	collapsed_preview.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	collapsed_preview.clip_text = false
 	var scrollbar := _vertical_scrollbar()
 	if scrollbar != null and not scrollbar.value_changed.is_connected(Callable(self, "_on_scroll_value_changed")):
 		scrollbar.value_changed.connect(Callable(self, "_on_scroll_value_changed"))
@@ -86,14 +89,11 @@ func refresh() -> void:
 		_update_view_mode()
 		return
 
-	var auto_scroll := _should_auto_scroll()
 	var normalized := _normalize_events(events)
 	_rebuild_rows(normalized)
 	_update_status_label(events.size())
 	_update_collapsed_preview(normalized)
-
-	if auto_scroll:
-		call_deferred("_scroll_to_bottom")
+	call_deferred("_scroll_to_bottom")
 	_update_view_mode()
 
 func _setup_filters() -> void:
@@ -113,11 +113,10 @@ func _on_filter_pressed(filter_name: String) -> void:
 	if _active_filter == filter_name:
 		return
 
-	var auto_scroll := _should_auto_scroll()
 	_active_filter = filter_name
 	_refresh_filter_buttons()
 	_apply_filter_to_all_rows()
-	_scroll_ledger_to_bottom_if_following(auto_scroll)
+	call_deferred("_scroll_to_bottom")
 	_update_view_mode()
 
 func _refresh_filter_buttons() -> void:
@@ -192,6 +191,7 @@ func _rebuild_rows(entries: Array[Dictionary]) -> void:
 func _append_event(entry: Dictionary) -> void:
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.size_flags_vertical = Control.SIZE_FILL
 	row.custom_minimum_size = Vector2(0.0, 28.0)
 	row.add_theme_constant_override("separation", 8)
 
@@ -209,10 +209,12 @@ func _append_event(entry: Dictionary) -> void:
 
 	var message_label := Label.new()
 	message_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	message_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	message_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	message_label.size_flags_vertical = Control.SIZE_FILL
+	message_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	message_label.clip_text = false
 	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	message_label.text = _truncate_message(str(entry.get("message", "")))
+	message_label.text = str(entry.get("message", ""))
 
 	row.add_child(time_label)
 	row.add_child(chip)
@@ -275,17 +277,12 @@ func _format_message(entry: Variant) -> String:
 			parts.append(str(entry.get("lever_id", "event")))
 	return ", ".join(parts)
 
-func _truncate_message(message: String) -> String:
-	if message.length() <= 80:
-		return message
-	return message.left(77) + "..."
-
 func _update_collapsed_preview(entries: Array[Dictionary]) -> void:
 	if entries.is_empty():
 		collapsed_preview.text = "LAST: -"
 		return
 	var last_entry := entries[entries.size() - 1]
-	collapsed_preview.text = "LAST: %s" % _truncate_message(str(last_entry.get("message", "")))
+	collapsed_preview.text = "LAST: %s" % str(last_entry.get("message", ""))
 
 func _update_view_mode() -> void:
 	var manage_modules: bool = modules_container != null and modules_container.get_parent() == $Root
@@ -337,7 +334,7 @@ func _format_module_row(snapshot: Dictionary) -> String:
 	var powered := "yes" if bool(snapshot.get("powered", false)) else "no"
 	var online := "yes" if bool(snapshot.get("online", false)) else "no"
 	var id := str(snapshot.get("id", "-"))
-	return "F%d (%d,%d) %s powered:%s online:%s id:%s" % [level_index, x, y, module_label, powered, online, id]
+	return "%d.%d.%d %s powered:%s online:%s id:%s" % [level_index, x, y, module_label, powered, online, id]
 
 func _module_snapshot_compare(a: Dictionary, b: Dictionary) -> bool:
 	if not (a is Dictionary) or not (b is Dictionary):
@@ -346,18 +343,14 @@ func _module_snapshot_compare(a: Dictionary, b: Dictionary) -> bool:
 	var b_level := int(b.get("floor", 0))
 	if a_level != b_level:
 		return a_level < b_level
-	var ay := int(a.get("y", 0))
-	var by := int(b.get("y", 0))
-	if ay != by:
-		return ay < by
 	var ax := int(a.get("x", 0))
 	var bx := int(b.get("x", 0))
 	if ax != bx:
 		return ax < bx
-	var a_type := str(a.get("type", "")).to_lower()
-	var b_type := str(b.get("type", "")).to_lower()
-	if a_type != b_type:
-		return a_type < b_type
+	var ay := int(a.get("y", 0))
+	var by := int(b.get("y", 0))
+	if ay != by:
+		return ay < by
 	return false
 
 func _on_module_selected(index: int) -> void:
@@ -392,7 +385,7 @@ func _update_inspector(snapshot: Dictionary) -> void:
 	var online_text := "yes" if bool(snapshot.get("online", false)) else "no"
 	inspector_id_label.text = "ID: %s" % id_text
 	inspector_type_label.text = "Type: %s" % type_text
-	inspector_location_label.text = "Location: F%d (%d,%d)" % [level_index, x, y]
+	inspector_location_label.text = "Location: %d.%d.%d" % [level_index, x, y]
 	inspector_powered_label.text = "Powered: %s" % powered_text
 	inspector_online_label.text = "Online: %s" % online_text
 	var delta_summary := _format_module_deltas(snapshot.get("deltas", {}))
