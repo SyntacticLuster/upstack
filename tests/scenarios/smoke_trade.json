@@ -1,0 +1,44 @@
+{
+  "metadata": {
+    "name": "smoke_trade",
+    "seed": 12345,
+    "description": "Verify basic trade buy/sell mechanics and invariants"
+  },
+  "actions": [
+    {"type": "comment", "text": "Setup: start with default state"},
+    {"type": "snapshot", "label": "initial"},
+    
+    {"type": "advance_hours", "hours": 6},
+    {"type": "snapshot", "label": "pre_trade"},
+    
+    {"type": "comment", "text": "Test: Buy food with silver"},
+    {"type": "trade", "direction": "buy", "resource": "food", "amount": 5},
+    {"type": "snapshot", "label": "post_buy_food"},
+    
+    {"type": "advance_hours", "hours": 6},
+    
+    {"type": "comment", "text": "Test: Sell materials for silver"},
+    {"type": "trade", "direction": "sell", "resource": "materials", "amount": 10},
+    {"type": "snapshot", "label": "post_sell_materials"},
+    
+    {"type": "advance_hours", "hours": 6},
+    
+    {"type": "comment", "text": "Test: Buy water"},
+    {"type": "trade", "direction": "buy", "resource": "water", "amount": 8},
+    {"type": "snapshot", "label": "post_buy_water"},
+    
+    {"type": "advance_days", "days": 1},
+    
+    {"type": "comment", "text": "Test: Multiple trades in sequence"},
+    {"type": "trade", "direction": "sell", "resource": "food", "amount": 3},
+    {"type": "trade", "direction": "buy", "resource": "materials", "amount": 2},
+    {"type": "snapshot", "label": "post_multi_trade"},
+    
+    {"type": "advance_days", "days": 2},
+    {"type": "snapshot", "label": "final"},
+    
+    {"type": "assert", "condition": "res.food >= 0", "message": "Food must remain non-negative"},
+    {"type": "assert", "condition": "res.water >= 0", "message": "Water must remain non-negative"},
+    {"type": "assert", "condition": "res.materials >= 0", "message": "Materials must remain non-negative"}
+  ]
+}

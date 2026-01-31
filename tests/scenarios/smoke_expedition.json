@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "name": "smoke_expedition",
+    "seed": 54321,
+    "description": "Verify expedition launch, state machine, progress, and resolution"
+  },
+  "actions": [
+    {"type": "comment", "text": "Setup: start with default state"},
+    {"type": "snapshot", "label": "initial"},
+    
+    {"type": "advance_hours", "hours": 4},
+    
+    {"type": "comment", "text": "Test: Launch expedition to scrapyard"},
+    {"type": "expedition", "destination_id": "scrapyard", "crew": 2},
+    {"type": "assert", "condition": "has_active_expedition", "message": "Expedition should be active after launch"},
+    {"type": "snapshot", "label": "post_launch"},
+    
+    {"type": "comment", "text": "Test: Wait for expedition to complete"},
+    {"type": "wait_expedition_resolve", "timeout_hours": 50},
+    {"type": "assert", "condition": "!has_active_expedition", "message": "Expedition should be resolved after wait"},
+    {"type": "snapshot", "label": "post_resolve"},
+    
+    {"type": "advance_days", "days": 1},
+    
+    {"type": "comment", "text": "Test: Launch second expedition to different location"},
+    {"type": "expedition", "destination_id": "reservoir", "crew": 1},
+    {"type": "assert", "condition": "has_active_expedition", "message": "Second expedition should be active"},
+    {"type": "snapshot", "label": "post_second_launch"},
+    
+    {"type": "wait_expedition_resolve", "timeout_hours": 60},
+    {"type": "assert", "condition": "!has_active_expedition", "message": "Second expedition should be resolved"},
+    {"type": "snapshot", "label": "final"},
+    
+    {"type": "assert", "condition": "res.population >= 1", "message": "Population must remain positive"}
+  ]
+}

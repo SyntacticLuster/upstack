@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "name": "trade_smoke",
+    "seed": 12345,
+    "description": "Trade smoke test with rejection cases and deterministic signature"
+  },
+  "actions": [
+    {"type": "snapshot", "label": "initial"},
+
+    {"type": "comment", "text": "Rejection case: invalid amount (0)"},
+    {"type": "trade", "direction": "buy", "resource": "food", "amount": 0},
+    {"type": "assert", "condition": "res.materials == 50", "message": "Materials unchanged after rejected trade"},
+
+    {"type": "comment", "text": "Rejection case: invalid resource"},
+    {"type": "trade", "direction": "buy", "resource": "gold", "amount": 1},
+    {"type": "assert", "condition": "res.materials == 50", "message": "Materials unchanged after rejected resource trade"},
+
+    {"type": "comment", "text": "Valid trade: sell materials to gain silver"},
+    {"type": "trade", "direction": "sell", "resource": "materials", "amount": 5},
+
+    {"type": "comment", "text": "Valid trade: buy food with silver"},
+    {"type": "trade", "direction": "buy", "resource": "food", "amount": 3},
+
+    {"type": "snapshot", "label": "final"},
+    {"type": "assert", "condition": "res.food >= 0", "message": "Food must remain non-negative"}
+  ]
+}

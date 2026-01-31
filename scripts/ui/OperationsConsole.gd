@@ -18,6 +18,8 @@ const COLOR_AUTHORITY := Color(0.27, 0.55, 0.85)
 const COLOR_DESPERATION := Color(0.65, 0.74, 0.20)
 const COLOR_LOCKED := Color(0.24, 0.27, 0.33)
 const COLOR_DEBUG := Color(0.54, 0.39, 0.63)
+const MAP_PANEL_SCENE := preload("res://scenes/ui/MapPanel.tscn")
+const SHOW_POLICY_EXPEDITIONS_SECTION := false
 
 const LEVER_BASE_PATHS := {
 	LEVER_RATION_HARDENING: "SectionPressure/PressureContent/RationHardening",
@@ -194,6 +196,7 @@ const TRADE_RESOURCE_OPTIONS := ["food", "water", "materials"]
 @onready var pressure_content: VBoxContainer = _require_section_node("SectionPressure/PressureContent", "VBoxContainer") as VBoxContainer
 @onready var expedition_toggle: Button = _require_section_node("SectionExpeditions/ExpeditionToggle", "Button") as Button
 @onready var expedition_content: VBoxContainer = _require_section_node("SectionExpeditions/ExpeditionContent", "VBoxContainer") as VBoxContainer
+@onready var section_expeditions: Control = _require_section_node("SectionExpeditions", "VBoxContainer") as Control
 @onready var conversion_toggle: Button = _require_section_node("SectionConversions/ConversionToggle", "Button") as Button
 @onready var conversion_content: VBoxContainer = _require_section_node("SectionConversions/ConversionContent", "VBoxContainer") as VBoxContainer
 
@@ -239,6 +242,9 @@ var _lever_nodes: Dictionary = {}
 var _input_controls_ready: bool = false
 var _last_results: Dictionary = {}
 var _ration_pulse_tween: Tween = null
+var _expedition_list_panel: Control = null
+var _expedition_map_panel: Control = null
+var _expedition_tabs_configured: bool = false
 func _variant_to_int(value: Variant) -> int:
 	if value == null:
 		return 0
@@ -308,17 +314,173 @@ func _ready() -> void:
 		_setup_inputs()
 	_map_lever_nodes()
 	_apply_tooltips_and_labels()
+	_apply_layout_v2()
+	call_deferred("_configure_expedition_tabs")
 	if _input_controls_ready:
 		_bind_buttons()
 		_connect_pressure_signals()
 	_refresh_lever_colors()
 	_refresh_lever_states()
 
+func _apply_layout_v2() -> void:
+	if _sections_root == null:
+		return
+	var top_split := _sections_root.get_node_or_null("TopPoliciesSplit") as HSplitContainer
+	if top_split == null:
+		return
+	var left_column := top_split.get_node_or_null("LeftPoliciesColumn") as VBoxContainer
+	var right_column := top_split.get_node_or_null("RightPoliciesColumn") as VBoxContainer
+	if left_column == null or right_column == null:
+		return
+	var section_pressure := _sections_root.get_node_or_null("SectionPressure") as Control
+	if section_pressure != null and section_pressure.get_parent() != left_column:
+		section_pressure.reparent(left_column)
+	var trade_policy: Control = null
+	if section_pressure != null:
+		trade_policy = section_pressure.get_node_or_null("PressureContent/TradePolicy") as Control
+	else:
+		trade_policy = _sections_root.get_node_or_null("SectionPressure/PressureContent/TradePolicy") as Control
+	if trade_policy != null and trade_policy.get_parent() != right_column:
+		trade_policy.reparent(right_column)
+	var module_abandonment := _sections_root.get_node_or_null("SectionExpeditions/ExpeditionContent/ModuleAbandonment") as Control
+	if module_abandonment != null and module_abandonment.get_parent() != right_column:
+		module_abandonment.reparent(right_column)
+	var section_conversions := _sections_root.get_node_or_null("SectionConversions") as Control
+	if section_conversions != null and section_conversions.get_parent() != right_column:
+		section_conversions.reparent(right_column)
+
 func set_sim(sim_ref: Object) -> void:
 	if _sim_bridge == null:
 		_sim_bridge = SimBridge.new()
 	_sim_bridge.set_sim(sim_ref)
+	_sync_expedition_panels_sim()
+	call_deferred("_configure_expedition_tabs")
 	refresh()
+
+func _configure_expedition_tabs() -> void:
+	if _expedition_tabs_configured:
+		_apply_expedition_tab_modes()
+		_sync_expedition_panels_sim()
+		return
+	var root_node := get_tree().root
+	if root_node == null:
+		return
+	var expedition_tabs := root_node.find_child("ExpeditionTabs", true, false) as TabContainer
+	if expedition_tabs == null:
+		return
+	var modules_tab := expedition_tabs.get_node_or_null("ModulesTab") as ScrollContainer
+	var modules_root: Control = null
+	if modules_tab == null:
+		modules_tab = ScrollContainer.new()
+		modules_tab.name = "ModulesTab"
+		modules_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		modules_tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		expedition_tabs.add_child(modules_tab)
+		var modules_root_box := VBoxContainer.new()
+		modules_root_box.name = "ModulesRoot"
+		modules_root_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		modules_root_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		modules_tab.add_child(modules_root_box)
+		modules_root = modules_root_box
+	else:
+		modules_root = modules_tab.get_node_or_null("ModulesRoot") as Control
+		if modules_root == null:
+			var fallback_root := VBoxContainer.new()
+			fallback_root.name = "ModulesRoot"
+			fallback_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			fallback_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			modules_tab.add_child(fallback_root)
+			modules_root = fallback_root
+	var ledger_panel := root_node.find_child("LedgerPanel", true, false) as Control
+	if ledger_panel != null and modules_root != null:
+		var modules_container := ledger_panel.get_node_or_null("Root/ModulesContainer") as Control
+		if modules_container != null:
+			if modules_container.get_parent() != modules_root:
+				modules_container.reparent(modules_root)
+			modules_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			modules_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			modules_container.visible = true
+	if modules_tab != null:
+		var modules_idx := expedition_tabs.get_tab_idx_from_control(modules_tab)
+		if modules_idx >= 0:
+			expedition_tabs.set_tab_title(modules_idx, "MODULES")
+	var expeditions_root := expedition_tabs.get_node_or_null("ExpeditionsTab/ExpeditionsRoot") as Control
+	if expeditions_root != null:
+		var list_panel := expeditions_root.get_node_or_null("ExpeditionListPanel") as Control
+		if list_panel == null:
+			list_panel = root_node.find_child("ExpeditionListPanel", true, false) as Control
+		if list_panel != null and list_panel.get_parent() != expeditions_root:
+			list_panel.reparent(expeditions_root)
+		if list_panel == null:
+			var map_instance := MAP_PANEL_SCENE.instantiate() as Control
+			map_instance.name = "ExpeditionListPanel"
+			expeditions_root.add_child(map_instance)
+			map_instance.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			map_instance.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			list_panel = map_instance
+		if list_panel != null:
+			list_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			list_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		var compression_panel := _sections_root.get_node_or_null("SectionExpeditions/ExpeditionContent/ExpeditionCompression") as Control
+		if compression_panel == null:
+			compression_panel = root_node.find_child("ExpeditionCompression", true, false) as Control
+		if compression_panel != null:
+			if compression_panel.get_parent() != expeditions_root:
+				compression_panel.reparent(expeditions_root)
+				compression_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			if list_panel != null and compression_panel.get_parent() == expeditions_root:
+				var list_index := list_panel.get_index()
+				if compression_panel.get_index() > list_index:
+					expeditions_root.move_child(compression_panel, list_index)
+		_expedition_list_panel = list_panel
+	var map_panel := expedition_tabs.get_node_or_null("MapTab/MapPanel") as Control
+	if map_panel != null:
+		_expedition_map_panel = map_panel
+		_ensure_full_rect(map_panel)
+	if SHOW_POLICY_EXPEDITIONS_SECTION and section_expeditions != null and _sections_root != null and section_expeditions.get_parent() != _sections_root:
+		section_expeditions.reparent(_sections_root)
+		var pressure_section := _sections_root.get_node_or_null("SectionPressure") as Control
+		if pressure_section != null:
+			_sections_root.move_child(section_expeditions, pressure_section.get_index() + 1)
+	elif not SHOW_POLICY_EXPEDITIONS_SECTION and section_expeditions != null:
+		section_expeditions.visible = false
+	_expedition_tabs_configured = true
+	_apply_expedition_tab_modes()
+	_sync_expedition_panels_sim()
+
+func _apply_expedition_tab_modes() -> void:
+	_force_map_panel_mode(_expedition_list_panel, false)
+	_force_map_panel_mode(_expedition_map_panel, true)
+
+func _force_map_panel_mode(panel: Control, visual_only: bool) -> void:
+	if panel == null:
+		return
+	var mode_value := 1 if visual_only else 0
+	panel.set("_current_mode", mode_value)
+	if panel.has_method("_apply_mode"):
+		panel.call("_apply_mode")
+	var mode_toggle := panel.get_node_or_null("Root/Header/ModeToggle") as Button
+	if mode_toggle != null:
+		mode_toggle.visible = false
+
+func _ensure_full_rect(panel: Control) -> void:
+	if panel == null:
+		return
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.set_offsets_preset(Control.PRESET_FULL_RECT)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+func _sync_expedition_panels_sim() -> void:
+	if _sim_bridge == null:
+		return
+	var sim_ref := _sim_bridge.get_sim()
+	if sim_ref == null:
+		return
+	if _expedition_list_panel != null and _expedition_list_panel.has_method("set_sim"):
+		_expedition_list_panel.set_sim(sim_ref)
+	if _expedition_map_panel != null and _expedition_map_panel.has_method("set_sim"):
+		_expedition_map_panel.set_sim(sim_ref)
 
 func _setup_sections() -> void:
 	_section_config = {
@@ -328,12 +490,6 @@ func _setup_sections() -> void:
 			"label": "POLICIES",
 			"open": true,
 		},
-		"expeditions": {
-			"toggle": expedition_toggle,
-			"content": expedition_content,
-			"label": "EXPEDITIONS",
-			"open": true,
-		},
 		"conversions": {
 			"toggle": conversion_toggle,
 			"content": conversion_content,
@@ -341,6 +497,15 @@ func _setup_sections() -> void:
 			"open": true,
 		},
 	}
+	if SHOW_POLICY_EXPEDITIONS_SECTION:
+		_section_config["expeditions"] = {
+			"toggle": expedition_toggle,
+			"content": expedition_content,
+			"label": "EXPEDITIONS",
+			"open": true,
+		}
+	elif section_expeditions != null:
+		section_expeditions.visible = false
 	for section_name in _section_config.keys():
 		var info_variant: Variant = _section_config.get(section_name)
 		if not (info_variant is Dictionary):

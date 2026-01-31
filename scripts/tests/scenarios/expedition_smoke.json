@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "name": "expedition_smoke",
+    "seed": 54321,
+    "description": "Expedition smoke test with deterministic signature"
+  },
+  "actions": [
+    {"type": "snapshot", "label": "initial"},
+
+    {"type": "comment", "text": "Launch expedition"},
+    {"type": "expedition", "destination_id": "scrapyard", "crew": 2},
+
+    {"type": "comment", "text": "Wait for expedition to resolve"},
+    {"type": "wait_expedition_resolve", "timeout_hours": 50},
+
+    {"type": "snapshot", "label": "final"},
+    {"type": "assert", "condition": "res.population >= 1", "message": "Population must remain positive"}
+  ]
+}

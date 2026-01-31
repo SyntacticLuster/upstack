@@ -95,6 +95,10 @@ const TRADE_SELL_RATES := {
 	"water": 800,
 	"materials": 2200,
 }
+const TRADE_ATTENTION_BASE: float = 0.5
+const TRADE_ATTENTION_PER_UNIT: float = 0.02
+const TRADE_ATTENTION_CAP: float = 5.0
+const TRADE_MAX_AMOUNT: int = 999
 
 const CIVIL_UNREST_ENTER_THRESHOLD := 40
 const CIVIL_UNREST_EXIT_THRESHOLD := 45
@@ -612,10 +616,11 @@ func enqueue_command(cmd: SimCommand) -> void:
 func queue_trade(resource: String, direction: String, amount: int) -> Dictionary:
 	var normalized_resource := str(resource).to_lower()
 	var normalized_direction := str(direction).to_lower()
+	var amount_value: int = int(amount)
 	var payload := {
 		"direction": normalized_direction,
 		"resource": normalized_resource,
-		"amount": clamp(amount, 0, 999999),
+		"amount": amount_value,
 	}
 	var result := {"ok": false, "message": "INVALID TRADE"}
 	if normalized_direction != "buy" and normalized_direction != "sell":
@@ -624,7 +629,7 @@ func queue_trade(resource: String, direction: String, amount: int) -> Dictionary
 	if not TRADEABLE_RESOURCES.has(normalized_resource):
 		result["message"] = "INVALID RESOURCE"
 		return result
-	if amount <= 0:
+	if amount_value <= 0 or amount_value > TRADE_MAX_AMOUNT:
 		result["message"] = "INVALID AMOUNT"
 		return result
 	enqueue_command(SimCommand.new(CMD_TRADE, payload))
@@ -2364,7 +2369,7 @@ func _cmd_trade(payload: Dictionary, sim_res: Resources, obs: Array[String], sim
 		_log_trade_event(sim_day, "Trade rejected: unsupported resource.", "warn", base_payload)
 		_obs_push(obs, "TRADE_REJECTED_RESOURCE")
 		return
-	if amount <= 0:
+	if amount <= 0 or amount > TRADE_MAX_AMOUNT:
 		_log_trade_event(sim_day, "Trade rejected: invalid amount.", "warn", base_payload)
 		_obs_push(obs, "TRADE_REJECTED_AMOUNT")
 		return
@@ -2381,11 +2386,26 @@ func _cmd_trade(payload: Dictionary, sim_res: Resources, obs: Array[String], sim
 		var before_amount := sim_res.get_amount(resource)
 		sim_res.silver -= cost
 		sim_res.set_amount(resource, before_amount + amount)
+		var attention_cost: float = clamp(
+			TRADE_ATTENTION_BASE + (float(amount) * TRADE_ATTENTION_PER_UNIT),
+			0.0,
+			TRADE_ATTENTION_CAP
+		)
+		sim_res.attention_multiplier += attention_cost
+		if absf(attention_cost) >= SIM_FLOAT_SNAP:
+			sim_res.attention_multiplier = snappedf(sim_res.attention_multiplier, SIM_FLOAT_SNAP)
 		var event_payload := base_payload.duplicate()
 		event_payload["silver_change"] = -cost
 		event_payload["resource_before"] = before_amount
 		event_payload["resource_after"] = sim_res.get_amount(resource)
-		var message := "Bought %d %s for %s." % [amount, resource, Resources.format_currency(cost)]
+		event_payload["attention_cost"] = attention_cost
+		event_payload["attention_after"] = sim_res.attention_multiplier
+		var message := "Bought %d %s for %s. (+%.2f attention)" % [
+			amount,
+			resource,
+			Resources.format_currency(cost),
+			attention_cost,
+		]
 		_log_trade_event(sim_day, message, "info", event_payload)
 		_obs_push(obs, "TRADE_BUY@%s" % resource)
 	else:
@@ -2401,11 +2421,26 @@ func _cmd_trade(payload: Dictionary, sim_res: Resources, obs: Array[String], sim
 		var revenue := amount * rate
 		sim_res.set_amount(resource, available - amount)
 		sim_res.silver += revenue
+		var attention_cost: float = clamp(
+			TRADE_ATTENTION_BASE + (float(amount) * TRADE_ATTENTION_PER_UNIT),
+			0.0,
+			TRADE_ATTENTION_CAP
+		)
+		sim_res.attention_multiplier += attention_cost
+		if absf(attention_cost) >= SIM_FLOAT_SNAP:
+			sim_res.attention_multiplier = snappedf(sim_res.attention_multiplier, SIM_FLOAT_SNAP)
 		var event_payload := base_payload.duplicate()
 		event_payload["silver_change"] = revenue
 		event_payload["resource_before"] = available
 		event_payload["resource_after"] = sim_res.get_amount(resource)
-		var message := "Sold %d %s for %s." % [amount, resource, Resources.format_currency(revenue)]
+		event_payload["attention_cost"] = attention_cost
+		event_payload["attention_after"] = sim_res.attention_multiplier
+		var message := "Sold %d %s for %s. (+%.2f attention)" % [
+			amount,
+			resource,
+			Resources.format_currency(revenue),
+			attention_cost,
+		]
 		_log_trade_event(sim_day, message, "info", event_payload)
 		_obs_push(obs, "TRADE_SELL@%s" % resource)
 

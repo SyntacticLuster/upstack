@@ -1,7 +1,7 @@
 
 extends PanelContainer
 
-const FILTERS: Array[String] = ["All", "Sim", "Events", "Debug", "Modules"]
+const FILTERS: Array[String] = ["All", "Sim", "Events", "Debug"]
 const MAX_VISIBLE := 300
 
 const FILTER_TO_CATEGORY := {
@@ -9,7 +9,6 @@ const FILTER_TO_CATEGORY := {
 	"Sim": "SIM",
 	"Events": "EVENT",
 	"Debug": "DEBUG",
-	"Modules": "MODULES",
 }
 
 const COLOR_NEUTRAL := Color(0.44, 0.50, 0.55)
@@ -31,7 +30,6 @@ const LEDGER_EXPANDED_MIN_HEIGHT := 225
 	"Sim": $Root/Filters/SimFilter,
 	"Events": $Root/Filters/EventsFilter,
 	"Debug": $Root/Filters/DebugFilter,
-	"Modules": $Root/Filters/ModulesFilter,
 }
 @onready var header_row: HBoxContainer = $Root/HeaderRow
 @onready var filters_row: HBoxContainer = $Root/Filters
@@ -51,7 +49,6 @@ var _sim_bridge: SimBridge = null
 var _active_filter: String = "All"
 var _collapsed: bool = false
 var _module_snapshots: Array[Dictionary] = []
-var _last_event_filter: String = "All"
 
 func _ready() -> void:
 	_setup_filters()
@@ -108,24 +105,10 @@ func _on_filter_pressed(filter_name: String) -> void:
 	if not FILTERS.has(filter_name):
 		return
 
-	if filter_name == "Modules":
-		if _active_filter == "Modules":
-			_active_filter = _last_event_filter
-			_refresh_filter_buttons()
-			_apply_filter_to_all_rows()
-			_update_view_mode()
-			return
-		_last_event_filter = _active_filter if _active_filter != "Modules" else _last_event_filter
-		_active_filter = "Modules"
-		_refresh_filter_buttons()
-		_update_view_mode()
-		return
-
 	if _active_filter == filter_name:
 		return
 
 	_active_filter = filter_name
-	_last_event_filter = filter_name
 	_refresh_filter_buttons()
 	_apply_filter_to_all_rows()
 	_update_view_mode()
@@ -299,13 +282,12 @@ func _update_collapsed_preview(entries: Array[Dictionary]) -> void:
 	collapsed_preview.text = "LAST: %s" % _truncate_message(str(last_entry.get("message", "")))
 
 func _update_view_mode() -> void:
-	var modules_active: bool = not _collapsed and _active_filter == "Modules"
-	modules_container.visible = modules_active
-	scroll_container.visible = not _collapsed and not modules_active
-	status_label.visible = not _collapsed and not modules_active
-	collapsed_preview.visible = _collapsed and _active_filter != "Modules"
-	if modules_active:
-		_refresh_modules_data()
+	var manage_modules: bool = modules_container != null and modules_container.get_parent() == $Root
+	if manage_modules:
+		modules_container.visible = false
+	scroll_container.visible = not _collapsed
+	status_label.visible = not _collapsed
+	collapsed_preview.visible = _collapsed
 
 func _refresh_modules_data() -> void:
 	if _sim_bridge == null or not _sim_bridge.has_sim():
@@ -449,8 +431,6 @@ func _scroll_to_bottom() -> void:
 	scrollbar.value = scrollbar.max_value
 
 func _apply_filter_to_all_rows() -> void:
-	if _active_filter == "Modules":
-		return
 	for row in list_container.get_children():
 		var category: String = str(row.get_meta("category", "DEBUG"))
 		var visibility: String = str(row.get_meta("visibility", "dev_only"))
@@ -468,8 +448,6 @@ func _matches_filter(category: String, visibility: String, severity: String) -> 
 			return visibility in ["player_feed", "toast", "sticky", "modal"]
 		"EVENT":
 			return visibility in ["sticky", "modal"]
-		"MODULES":
-			return true
 		_:
 			return category == filter_token
 

@@ -1,0 +1,52 @@
+{
+  "metadata": {
+    "name": "regression_lever_stack",
+    "seed": 77777,
+    "description": "Test policy lever stacking and duration tracking"
+  },
+  "actions": [
+    {"type": "comment", "text": "Setup: start with default state"},
+    {"type": "snapshot", "label": "initial"},
+    
+    {"type": "advance_hours", "hours": 3},
+    
+    {"type": "comment", "text": "Test: Apply ration hardening soft mode"},
+    {"type": "lever", "lever_id": "ration_hardening", "payload": {"mode": "soft", "duration_hours": 24}},
+    {"type": "snapshot", "label": "post_ration_soft"},
+    
+    {"type": "advance_hours", "hours": 6},
+    
+    {"type": "comment", "text": "Test: Apply labor overdrive while ration active"},
+    {"type": "lever", "lever_id": "labor_overdrive", "payload": {"intensity": 3, "duration_hours": 48}},
+    {"type": "snapshot", "label": "post_labor_stack"},
+    
+    {"type": "advance_hours", "hours": 6},
+    
+    {"type": "comment", "text": "Test: Apply information throttling (3 levers active)"},
+    {"type": "lever", "lever_id": "information_throttling", "payload": {"level": 3, "duration_hours": 36}},
+    {"type": "snapshot", "label": "post_info_stack"},
+    
+    {"type": "advance_hours", "hours": 12},
+    {"type": "snapshot", "label": "mid_stack"},
+    
+    {"type": "comment", "text": "Test: Ration hardening should expire soon"},
+    {"type": "advance_hours", "hours": 6},
+    {"type": "snapshot", "label": "post_ration_expire"},
+    
+    {"type": "advance_hours", "hours": 18},
+    {"type": "snapshot", "label": "mid_decay"},
+    
+    {"type": "comment", "text": "Test: Apply expedition compression lever"},
+    {"type": "lever", "lever_id": "expedition_compression", "payload": {"intensity": 2, "duration_hours": 24}},
+    {"type": "snapshot", "label": "post_expedition_compression"},
+    
+    {"type": "advance_days", "days": 2},
+    {"type": "snapshot", "label": "post_most_expiry"},
+    
+    {"type": "advance_days", "days": 1},
+    {"type": "snapshot", "label": "final"},
+    
+    {"type": "assert", "condition": "res.morale >= 0", "message": "Morale must remain non-negative"},
+    {"type": "assert", "condition": "res.threat >= 0", "message": "Threat must remain non-negative"}
+  ]
+}

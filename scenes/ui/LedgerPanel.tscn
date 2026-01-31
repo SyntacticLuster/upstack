@@ -63,10 +63,6 @@ toggle_mode = true
 text = "DEBUG"
 toggle_mode = true
 
-[node name="ModulesFilter" type="Button" parent="Root/Filters"]
-text = "MODULES"
-toggle_mode = true
-
 [node name="Status" type="Label" parent="Root"]
 text = "STATUS: DISCONNECTED"
 

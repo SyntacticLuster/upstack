@@ -45,11 +45,33 @@ size_flags_vertical = 3
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="MapPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("6_map")]
+[node name="BottomSplit" type="HSplitContainer" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 8
+
+[node name="ExpeditionTabs" type="TabContainer" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit"]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="LedgerPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit" instance=ExtResource("4_ledger")]
+[node name="ExpeditionsTab" type="ScrollContainer" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ExpeditionsRoot" type="VBoxContainer" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs/ExpeditionsTab"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_constants/separation = 10
+
+[node name="MapTab" type="Control" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="MapPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs/MapTab" instance=ExtResource("6_map")]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="LedgerPanel" parent="Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit" instance=ExtResource("4_ledger")]
 size_flags_horizontal = 3
 size_flags_vertical = 3
 

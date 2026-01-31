@@ -8,14 +8,18 @@ const BREAKPOINT_TABS := 800.0
 const BREAKPOINT_RAIL_COLLAPSE := 800.0
 const LEDGER_DEFAULT_RATIO := 0.2
 const LEDGER_MIN_HEIGHT := 225.0
+const BOTTOM_SPLIT_RATIO := 0.5
 
 @onready var root_control: Control = $Root
 @onready var hud_panel = $Root/Layout/HudPanel
 @onready var content_split: VSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit
 @onready var content_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentTabs
 @onready var console_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/OperationsConsole
-@onready var map_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/MapPanel
-@onready var ledger_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/LedgerPanel
+@onready var bottom_split: HSplitContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit
+@onready var expedition_tabs: TabContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs
+@onready var expeditions_root: VBoxContainer = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs/ExpeditionsTab/ExpeditionsRoot
+@onready var map_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/ExpeditionTabs/MapTab/MapPanel
+@onready var ledger_panel = $Root/Layout/HudPanel/Root/MainRow/ContentColumn/ContentSplit/BottomSplit/LedgerPanel
 @onready var toast_panel: PanelContainer = $Root/ToastLayer/ToastPanel
 @onready var toast_label: Label = $Root/ToastLayer/ToastPanel/ToastLabel
 @onready var modal_layer: ColorRect = $Root/ModalLayer
@@ -43,6 +47,8 @@ func _ready() -> void:
 	console_panel.set_sim(_sim)
 	map_panel.set_sim(_sim)
 	ledger_panel.set_sim(_sim)
+	_move_expeditions_to_tabs()
+	_ensure_expedition_tab_titles()
 	if _event_bridge == null:
 		_event_bridge = SimBridge.new()
 	_event_bridge.set_sim(_sim)
@@ -149,32 +155,33 @@ func _apply_content_layout(use_tabs: bool) -> void:
 	content_split.visible = not use_tabs
 	if not use_tabs:
 		_apply_split_ratio()
+	_apply_bottom_split_ratio()
 
 func _move_to_tabs() -> void:
 	if console_panel != null and console_panel.get_parent() != content_tabs:
 		console_panel.reparent(content_tabs)
-	if ledger_panel != null and ledger_panel.get_parent() != content_tabs:
-		ledger_panel.reparent(content_tabs)
+	if bottom_split != null and bottom_split.get_parent() != content_tabs:
+		bottom_split.reparent(content_tabs)
 	_ensure_tab_titles()
 
 func _move_to_split() -> void:
 	if console_panel != null and console_panel.get_parent() != content_split:
 		console_panel.reparent(content_split)
-	if ledger_panel != null and ledger_panel.get_parent() != content_split:
-		ledger_panel.reparent(content_split)
-	if console_panel != null and ledger_panel != null:
+	if bottom_split != null and bottom_split.get_parent() != content_split:
+		bottom_split.reparent(content_split)
+	if console_panel != null and bottom_split != null:
 		content_split.move_child(console_panel, 0)
-		content_split.move_child(ledger_panel, 1)
+		content_split.move_child(bottom_split, 1)
 
 func _ensure_tab_titles() -> void:
 	if console_panel != null:
 		var idx := content_tabs.get_tab_idx_from_control(console_panel)
 		if idx >= 0:
 			content_tabs.set_tab_title(idx, "OPERATIONS")
-	if ledger_panel != null:
-		var idx := content_tabs.get_tab_idx_from_control(ledger_panel)
+	if bottom_split != null:
+		var idx := content_tabs.get_tab_idx_from_control(bottom_split)
 		if idx >= 0:
-			content_tabs.set_tab_title(idx, "LEDGER")
+			content_tabs.set_tab_title(idx, "FIELD")
 
 func _apply_split_ratio() -> void:
 	if _split_initialized:
@@ -187,6 +194,41 @@ func _apply_split_ratio() -> void:
 	var top_height := int(max(0.0, total_height - ledger_target))
 	content_split.split_offset = top_height
 	_split_initialized = true
+
+func _apply_bottom_split_ratio() -> void:
+	if bottom_split == null:
+		return
+	if bottom_split.size.x <= 0.0:
+		call_deferred("_apply_bottom_split_ratio")
+		return
+	var total_width := bottom_split.size.x
+	bottom_split.split_offset = int(max(0.0, total_width * BOTTOM_SPLIT_RATIO))
+
+func _ensure_expedition_tab_titles() -> void:
+	if expedition_tabs == null:
+		return
+	var expeditions_tab := expedition_tabs.get_node_or_null("ExpeditionsTab") as Control
+	if expeditions_tab != null:
+		var expeditions_idx := expedition_tabs.get_tab_idx_from_control(expeditions_tab)
+		if expeditions_idx >= 0:
+			expedition_tabs.set_tab_title(expeditions_idx, "EXPEDITIONS")
+	if map_panel != null:
+		var map_tab := map_panel.get_parent() as Control
+		if map_tab != null:
+			var map_idx := expedition_tabs.get_tab_idx_from_control(map_tab)
+			if map_idx >= 0:
+				expedition_tabs.set_tab_title(map_idx, "MAP")
+
+func _move_expeditions_to_tabs() -> void:
+	if console_panel == null or expeditions_root == null:
+		return
+	var expeditions_section := console_panel.get_node_or_null("Layout/Scroll/Root/SectionExpeditions") as Control
+	if expeditions_section == null:
+		return
+	if expeditions_section.get_parent() != expeditions_root:
+		expeditions_section.reparent(expeditions_root)
+		expeditions_section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		expeditions_section.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 func _refresh_event_routing() -> void:
 	if _event_bridge == null or not _event_bridge.has_sim():

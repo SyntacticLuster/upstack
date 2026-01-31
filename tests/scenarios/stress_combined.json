@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "name": "stress_combined",
+    "seed": 99999,
+    "description": "Multi-system stress test combining trade, expeditions, and policy levers"
+  },
+  "actions": [
+    {"type": "comment", "text": "Setup: start with default state"},
+    {"type": "snapshot", "label": "initial"},
+    
+    {"type": "advance_hours", "hours": 2},
+    
+    {"type": "comment", "text": "Phase 1: Apply ration hardening lever"},
+    {"type": "lever", "lever_id": "ration_hardening", "payload": {"mode": "soft", "duration_hours": 48}},
+    {"type": "snapshot", "label": "post_lever_ration"},
+    
+    {"type": "advance_hours", "hours": 4},
+    
+    {"type": "comment", "text": "Phase 2: Execute trades while lever active"},
+    {"type": "trade", "direction": "sell", "resource": "materials", "amount": 15},
+    {"type": "snapshot", "label": "post_sell"},
+    
+    {"type": "advance_hours", "hours": 2},
+    
+    {"type": "trade", "direction": "buy", "resource": "food", "amount": 10},
+    {"type": "snapshot", "label": "post_buy"},
+    
+    {"type": "advance_hours", "hours": 6},
+    
+    {"type": "comment", "text": "Phase 3: Launch expedition while lever active"},
+    {"type": "expedition", "destination_id": "scrapyard", "crew": 2},
+    {"type": "assert", "condition": "has_active_expedition", "message": "Expedition should launch"},
+    {"type": "snapshot", "label": "post_expedition_launch"},
+    
+    {"type": "advance_hours", "hours": 12},
+    
+    {"type": "comment", "text": "Phase 4: Apply labor overdrive while expedition active"},
+    {"type": "lever", "lever_id": "labor_overdrive", "payload": {"intensity": 2, "duration_hours": 24}},
+    {"type": "snapshot", "label": "post_lever_labor"},
+    
+    {"type": "comment", "text": "Phase 5: Wait for expedition to complete"},
+    {"type": "wait_expedition_resolve", "timeout_hours": 40},
+    {"type": "snapshot", "label": "post_expedition_resolve"},
+    
+    {"type": "advance_days", "days": 1},
+    
+    {"type": "comment", "text": "Phase 6: Execute more trades after expedition"},
+    {"type": "trade", "direction": "sell", "resource": "food", "amount": 5},
+    {"type": "trade", "direction": "buy", "resource": "water", "amount": 10},
+    {"type": "snapshot", "label": "post_final_trades"},
+    
+    {"type": "advance_days", "days": 2},
+    
+    {"type": "comment", "text": "Phase 7: Apply information throttling"},
+    {"type": "lever", "lever_id": "information_throttling", "payload": {"level": 2, "duration_hours": 72}},
+    {"type": "snapshot", "label": "post_lever_info"},
+    
+    {"type": "advance_days", "days": 3},
+    {"type": "snapshot", "label": "final"},
+    
+    {"type": "assert", "condition": "res.food >= 0", "message": "Food must remain non-negative"},
+    {"type": "assert", "condition": "res.water >= 0", "message": "Water must remain non-negative"},
+    {"type": "assert", "condition": "res.materials >= 0", "message": "Materials must remain non-negative"},
+    {"type": "assert", "condition": "res.population >= 1", "message": "Population must remain positive"}
+  ]
+}
