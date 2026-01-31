@@ -1,4 +1,3 @@
-
 extends PanelContainer
 
 const FILTERS: Array[String] = ["All", "Sim", "Events", "Debug"]
@@ -21,6 +20,7 @@ const CATEGORY_COLORS := {
 }
 const LEDGER_COLLAPSED_HEIGHT := 40
 const LEDGER_EXPANDED_MIN_HEIGHT := 225
+const SCROLL_FOLLOW_THRESHOLD := 16
 
 @onready var status_label: Label = $Root/Status
 @onready var scroll_container: ScrollContainer = $Root/Scroll
@@ -108,9 +108,11 @@ func _on_filter_pressed(filter_name: String) -> void:
 	if _active_filter == filter_name:
 		return
 
+	var auto_scroll := _should_auto_scroll()
 	_active_filter = filter_name
 	_refresh_filter_buttons()
 	_apply_filter_to_all_rows()
+	_scroll_ledger_to_bottom_if_following(auto_scroll)
 	_update_view_mode()
 
 func _refresh_filter_buttons() -> void:
@@ -245,8 +247,7 @@ func _time_info(entry: Variant) -> Dictionary:
 		info["day"] = int(day_value)
 	if hour_value != null:
 		info["hour"] = int(hour_value)
-	return info
-
+	_scroll_ledger_to_bottom_if_following(auto_scroll)
 func _format_message(entry: Variant) -> String:
 	if not (entry is Dictionary):
 		return str(entry)
@@ -422,7 +423,12 @@ func _should_auto_scroll() -> bool:
 	var scrollbar: VScrollBar = _vertical_scrollbar()
 	if scrollbar == null:
 		return true
-	return scrollbar.value >= scrollbar.max_value - 4
+	return (scrollbar.max_value - scrollbar.value) <= SCROLL_FOLLOW_THRESHOLD
+
+func _scroll_ledger_to_bottom_if_following(near_bottom: bool) -> void:
+	if not near_bottom:
+		return
+	call_deferred("_scroll_to_bottom")
 
 func _scroll_to_bottom() -> void:
 	var scrollbar: VScrollBar = _vertical_scrollbar()
