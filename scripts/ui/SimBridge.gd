@@ -42,7 +42,7 @@ func get_hour_of_day() -> int:
 
 func get_day_index() -> int:
 	if _get_sim_property("hour_index") != null:
-		return int(get_hour_index() / 24)
+		return int(float(get_hour_index()) / 24.0)
 	return get_day()
 
 func get_phase() -> String:
@@ -77,6 +77,13 @@ func get_attention_meter_value() -> float:
 			return float(value)
 	return 0.0
 
+func get_attention_meter_max() -> float:
+	if _sim == null:
+		return 100.0
+	if _sim.has_method("get_attention_meter_max"):
+		return float(_sim.get_attention_meter_max())
+	return 100.0
+
 func get_threat_meter_value() -> int:
 	if _sim == null:
 		return 0
@@ -86,6 +93,13 @@ func get_threat_meter_value() -> int:
 	if res_value != null:
 		return int(res_value.threat)
 	return 0
+
+func get_threat_meter_max() -> int:
+	if _sim == null:
+		return 100
+	if _sim.has_method("get_threat_meter_max"):
+		return int(_sim.get_threat_meter_max())
+	return 100
 
 func get_events() -> Array[Dictionary]:
 	var empty_events: Array[Dictionary] = []

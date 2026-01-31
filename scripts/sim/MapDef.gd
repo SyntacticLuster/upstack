@@ -12,6 +12,7 @@ class LocationDef extends RefCounted:
 	var onsite_hours: int = 0    # Time spent at location.
 	var risk_level: int = 0      # 0=safe, 1=low, 2=medium, 3=high.
 	var resources: Dictionary = {}  # Available yields: {"food": 30, "materials": 50, ...}.
+	var weight_profile: Dictionary = {}  # Resource allocation weights (sum to 1.0).
 	var position: Vector2 = Vector2.ZERO  # Visual map position (0-1 normalized).
 	var connected_to: Array[String] = []  # Location IDs this connects to (for visual edges).
 
@@ -22,6 +23,7 @@ class LocationDef extends RefCounted:
 		_onsite_hours: int = 2,
 		_risk_level: int = 1,
 		_resources: Dictionary = {},
+		_weight_profile: Dictionary = {},
 		_position: Vector2 = Vector2.ZERO,
 		_connected_to: Array[String] = []
 	) -> void:
@@ -31,6 +33,7 @@ class LocationDef extends RefCounted:
 		onsite_hours = max(_onsite_hours, 1)
 		risk_level = clamp(_risk_level, 0, 3)
 		resources = _resources.duplicate(true)
+		weight_profile = _weight_profile.duplicate(true)
 		position = _position
 		connected_to = _connected_to.duplicate()
 
@@ -46,6 +49,7 @@ class LocationDef extends RefCounted:
 			"onsite_hours": onsite_hours,
 			"risk_level": risk_level,
 			"resources": resources.duplicate(true),
+			"weight_profile": weight_profile.duplicate(true),
 			"position": {"x": position.x, "y": position.y},
 			"connected_to": connected_to.duplicate(),
 		}
@@ -60,6 +64,7 @@ const DEFAULT_LOCATIONS: Array[Dictionary] = [
 		"onsite_hours": 3,
 		"risk_level": 1,
 		"resources": {"materials": 60, "food": 10},
+		"weight_profile": {"materials": 0.65, "food": 0.15, "water": 0.10, "silver": 0.10},
 		"position": Vector2(0.3, 0.2),
 		"connected_to": ["tower", "reservoir"],
 	},
@@ -70,6 +75,7 @@ const DEFAULT_LOCATIONS: Array[Dictionary] = [
 		"onsite_hours": 2,
 		"risk_level": 1,
 		"resources": {"water": 80, "materials": 15},
+		"weight_profile": {"water": 0.70, "materials": 0.20, "food": 0.05, "silver": 0.05},
 		"position": Vector2(0.7, 0.25),
 		"connected_to": ["tower", "scrapyard", "greenhouse"],
 	},
@@ -80,6 +86,7 @@ const DEFAULT_LOCATIONS: Array[Dictionary] = [
 		"onsite_hours": 4,
 		"risk_level": 2,
 		"resources": {"food": 70, "water": 20},
+		"weight_profile": {"food": 0.60, "water": 0.25, "materials": 0.10, "silver": 0.05},
 		"position": Vector2(0.8, 0.55),
 		"connected_to": ["reservoir", "bunker"],
 	},
@@ -90,6 +97,7 @@ const DEFAULT_LOCATIONS: Array[Dictionary] = [
 		"onsite_hours": 6,
 		"risk_level": 3,
 		"resources": {"materials": 100, "food": 40, "water": 30},
+		"weight_profile": {"materials": 0.35, "food": 0.25, "water": 0.20, "silver": 0.20},
 		"position": Vector2(0.5, 0.8),
 		"connected_to": ["greenhouse", "outpost"],
 	},
@@ -100,6 +108,7 @@ const DEFAULT_LOCATIONS: Array[Dictionary] = [
 		"onsite_hours": 3,
 		"risk_level": 2,
 		"resources": {"materials": 45, "food": 25},
+		"weight_profile": {"materials": 0.40, "food": 0.30, "water": 0.15, "silver": 0.15},
 		"position": Vector2(0.2, 0.7),
 		"connected_to": ["bunker", "tower"],
 	},
@@ -155,6 +164,7 @@ func _dict_to_location(data: Dictionary) -> LocationDef:
 		int(data.get("onsite_hours", 2)),
 		int(data.get("risk_level", 1)),
 		data.get("resources", {}) if data.get("resources") is Dictionary else {},
+		data.get("weight_profile", {}) if data.get("weight_profile") is Dictionary else {},
 		pos,
 		connected
 	)

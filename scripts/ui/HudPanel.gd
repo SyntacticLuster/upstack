@@ -388,20 +388,37 @@ func _update_meters() -> void:
 		return
 	var attention_raw: float = _sim_bridge.get_attention_meter_value()
 	var threat_raw: float = float(_sim_bridge.get_threat_meter_value())
-	var attention_value: float = _normalize_meter_value(attention_raw)
-	var threat_value: float = _normalize_meter_value(threat_raw)
+	var attention_max: float = _attention_meter_max()
+	var threat_max: float = _threat_meter_max()
+	attention_bar.max_value = attention_max
+	threat_bar.max_value = threat_max
+	var attention_value: float = _clamp_meter_value(attention_raw, attention_max)
+	var threat_value: float = _clamp_meter_value(threat_raw, threat_max)
 	attention_bar.value = attention_value
 	threat_bar.value = threat_value
-	attention_value_label.text = str(int(round(attention_value)))
-	threat_value_label.text = str(int(round(threat_value)))
-	_apply_meter_band_style(attention_bar, attention_value)
-	_apply_meter_band_style(threat_bar, threat_value)
+	attention_value_label.text = str(int(round(attention_raw)))
+	threat_value_label.text = str(int(round(threat_raw)))
+	_apply_meter_band_style(attention_bar, _meter_percent(attention_value, attention_max))
+	_apply_meter_band_style(threat_bar, _meter_percent(threat_value, threat_max))
 
-func _normalize_meter_value(raw: float) -> float:
-	var normalized: float = raw
-	if normalized >= 0.0 and normalized <= 1.0:
-		normalized = normalized * 100.0
-	return clamp(normalized, 0.0, 100.0)
+func _attention_meter_max() -> float:
+	if _sim_bridge == null:
+		return 100.0
+	return float(_sim_bridge.get_attention_meter_max())
+
+func _threat_meter_max() -> float:
+	if _sim_bridge == null:
+		return 100.0
+	return float(_sim_bridge.get_threat_meter_max())
+
+func _clamp_meter_value(raw: float, max_value: float) -> float:
+	var safe_max: float = max(max_value, 0.0)
+	return clamp(raw, 0.0, safe_max)
+
+func _meter_percent(value: float, max_value: float) -> float:
+	if max_value <= 0.0:
+		return 0.0
+	return clamp((value / max_value) * 100.0, 0.0, 100.0)
 
 func _apply_meter_band_style(bar: ProgressBar, value: float) -> void:
 	var style: StyleBoxFlat = _meter_style_green
@@ -538,10 +555,10 @@ func _on_alerts_close_pressed() -> void:
 func _is_alerts_drawer_visible() -> bool:
 	return alerts_drawer != null and alerts_drawer.visible
 
-func _set_alerts_drawer_visible(visible: bool) -> void:
+func _set_alerts_drawer_visible(drawer_visible: bool) -> void:
 	if alerts_drawer == null:
 		return
-	alerts_drawer.visible = visible
+	alerts_drawer.visible = drawer_visible
 
 func _determine_change_state(entry: Dictionary, current: Variant) -> String:
 	var numeric: float = _to_numeric(current)

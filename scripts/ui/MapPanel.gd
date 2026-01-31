@@ -5,7 +5,7 @@ extends PanelContainer
 ##   - List mode: A simple list of destinations with launch buttons.
 ##   - Visual mode: A node-graph style map using Control._draw().
 
-signal expedition_requested(destination_id: String, crew: int)
+signal expedition_requested(destination_id: String, crew: int, party_size: int)
 
 enum MapMode {
 	LIST,
@@ -30,6 +30,10 @@ const RISK_COLORS: Array[Color] = [
 @onready var launch_crew_spin: SpinBox = $Root/LaunchPanel/LaunchContent/CrewRow/CrewSpin
 @onready var launch_button: Button = $Root/LaunchPanel/LaunchContent/LaunchButton
 @onready var cancel_button: Button = $Root/LaunchPanel/LaunchContent/CancelButton
+@onready var outsiders_panel: PanelContainer = $Root/OutsidersPanel
+@onready var outsiders_label: Label = $Root/OutsidersPanel/OutsidersContent/OutsidersLabel
+@onready var outsiders_accept: Button = $Root/OutsidersPanel/OutsidersContent/ButtonRow/AcceptButton
+@onready var outsiders_reject: Button = $Root/OutsidersPanel/OutsidersContent/ButtonRow/RejectButton
 
 var _sim: Object = null
 var _current_mode: MapMode = MapMode.LIST
@@ -37,11 +41,14 @@ var _locations: Array = []
 var _edges: Array[Dictionary] = []
 var _selected_destination_id: String = ""
 var _node_positions: Dictionary = {}  # destination_id -> Vector2 (screen coords)
+var _pending_outsiders_event_id: int = -1
 
 func _ready() -> void:
 	mode_toggle.pressed.connect(_on_mode_toggle)
 	launch_button.pressed.connect(_on_launch_pressed)
 	cancel_button.pressed.connect(_on_cancel_pressed)
+	outsiders_accept.pressed.connect(_on_outsiders_accept)
+	outsiders_reject.pressed.connect(_on_outsiders_reject)
 	_apply_mode()
 	_clear_selection()
 
@@ -52,6 +59,7 @@ func set_sim(sim_ref: Object) -> void:
 func refresh() -> void:
 	_load_map_data()
 	_update_status()
+	_update_pending_outsiders()
 	if _current_mode == MapMode.LIST:
 		_rebuild_list()
 	else:
@@ -174,17 +182,20 @@ func _show_launch_panel() -> void:
 
 	launch_dest_label.text = "Destination: %s" % str(loc.get("name", "Unknown"))
 
-	var max_crew := 6
+	var max_party_size := 6
 	if _sim != null:
-		var res: Object = _sim.get("res")
-		if res != null and res.has_method("get_amount"):
-			max_crew = int(res.get_amount("population"))
-		elif res != null:
-			max_crew = int(res.get("population"))
+		if _sim.has_method("get_max_party_size"):
+			max_party_size = int(_sim.get_max_party_size())
+		else:
+			var res: Object = _sim.get("res")
+			if res != null and res.has_method("get_amount"):
+				max_party_size = int(res.get_amount("population"))
+			elif res != null:
+				max_party_size = int(res.get("population"))
 
 	launch_crew_spin.min_value = 1
-	launch_crew_spin.max_value = max(max_crew, 1)
-	launch_crew_spin.value = min(2, max_crew)
+	launch_crew_spin.max_value = max(max_party_size, 1)
+	launch_crew_spin.value = min(2, max_party_size)
 
 	launch_panel.visible = true
 
@@ -198,12 +209,12 @@ func _on_launch_pressed() -> void:
 	if _selected_destination_id == "":
 		return
 
-	var crew := int(launch_crew_spin.value)
-	expedition_requested.emit(_selected_destination_id, crew)
+	var party_size := int(launch_crew_spin.value)
+	expedition_requested.emit(_selected_destination_id, party_size, party_size)
 
 	# Also try to call sim directly.
 	if _sim != null and _sim.has_method("launch_expedition"):
-		var result: Dictionary = _sim.launch_expedition(_selected_destination_id, crew)
+		var result: Dictionary = _sim.launch_expedition(_selected_destination_id, party_size, party_size)
 		print("launch_expedition result: ", result)
 
 	_clear_selection()
@@ -217,6 +228,49 @@ func _clear_selection() -> void:
 	launch_panel.visible = false
 	if visual_canvas != null:
 		visual_canvas.queue_redraw()
+
+func _update_pending_outsiders() -> void:
+	_pending_outsiders_event_id = -1
+	if _sim == null:
+		outsiders_panel.visible = false
+		return
+	if not _sim.has_method("get_pending_outsiders"):
+		outsiders_panel.visible = false
+		return
+	var pending: Variant = _sim.get_pending_outsiders()
+	if not (pending is Array):
+		outsiders_panel.visible = false
+		return
+	var pending_array: Array = pending as Array
+	if pending_array.is_empty():
+		outsiders_panel.visible = false
+		return
+	var entry: Variant = pending_array[0]
+	if not (entry is Dictionary):
+		outsiders_panel.visible = false
+		return
+	var entry_dict: Dictionary = entry as Dictionary
+	_pending_outsiders_event_id = int(entry_dict.get("id", -1))
+	var group_size: int = int(entry_dict.get("group_size", 0))
+	var dest: String = str(entry_dict.get("destination_id", ""))
+	outsiders_label.text = "Outsiders at the gate: %d from %s" % [group_size, dest]
+	outsiders_panel.visible = true
+
+func _on_outsiders_accept() -> void:
+	if _sim == null or _pending_outsiders_event_id < 0:
+		return
+	if _sim.has_method("queue_outsiders_decision"):
+		_sim.queue_outsiders_decision(_pending_outsiders_event_id, true)
+		_update_pending_outsiders()
+		refresh()
+
+func _on_outsiders_reject() -> void:
+	if _sim == null or _pending_outsiders_event_id < 0:
+		return
+	if _sim.has_method("queue_outsiders_decision"):
+		_sim.queue_outsiders_decision(_pending_outsiders_event_id, false)
+		_update_pending_outsiders()
+		refresh()
 
 # =============================================================================
 # Visual Mode

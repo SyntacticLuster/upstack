@@ -49,12 +49,17 @@ var _sim_bridge: SimBridge = null
 var _active_filter: String = "All"
 var _collapsed: bool = false
 var _module_snapshots: Array[Dictionary] = []
+var _follow_scroll: bool = true
 
 func _ready() -> void:
 	_setup_filters()
 	collapse_button.pressed.connect(_on_collapse_pressed)
 	modules_roster.connect("item_selected", Callable(self, "_on_module_selected"))
 	modules_roster.select_mode = ItemList.SELECT_SINGLE
+	var scrollbar := _vertical_scrollbar()
+	if scrollbar != null and not scrollbar.value_changed.is_connected(Callable(self, "_on_scroll_value_changed")):
+		scrollbar.value_changed.connect(Callable(self, "_on_scroll_value_changed"))
+	_follow_scroll = _is_near_bottom()
 	_update_collapse_state(false)
 	_clear_module_inspector()
 	_update_view_mode()
@@ -325,22 +330,22 @@ func _refresh_modules_data() -> void:
 func _format_module_row(snapshot: Dictionary) -> String:
 	if snapshot == null:
 		return "unknown module"
-	var floor := int(snapshot.get("floor", -1))
+	var level_index := int(snapshot.get("floor", -1))
 	var x := int(snapshot.get("x", -1))
 	var y := int(snapshot.get("y", -1))
-	var name := str(snapshot.get("name", snapshot.get("type", "unknown"))).to_upper()
+	var module_label := str(snapshot.get("name", snapshot.get("type", "unknown"))).to_upper()
 	var powered := "yes" if bool(snapshot.get("powered", false)) else "no"
 	var online := "yes" if bool(snapshot.get("online", false)) else "no"
 	var id := str(snapshot.get("id", "-"))
-	return "F%d (%d,%d) %s powered:%s online:%s id:%s" % [floor, x, y, name, powered, online, id]
+	return "F%d (%d,%d) %s powered:%s online:%s id:%s" % [level_index, x, y, module_label, powered, online, id]
 
 func _module_snapshot_compare(a: Dictionary, b: Dictionary) -> bool:
 	if not (a is Dictionary) or not (b is Dictionary):
 		return false
-	var afloor := int(a.get("floor", 0))
-	var bfloor := int(b.get("floor", 0))
-	if afloor != bfloor:
-		return afloor < bfloor
+	var a_level := int(a.get("floor", 0))
+	var b_level := int(b.get("floor", 0))
+	if a_level != b_level:
+		return a_level < b_level
 	var ay := int(a.get("y", 0))
 	var by := int(b.get("y", 0))
 	if ay != by:
@@ -380,14 +385,14 @@ func _update_inspector(snapshot: Dictionary) -> void:
 		return
 	var id_text := str(snapshot.get("id", "-"))
 	var type_text := str(snapshot.get("name", snapshot.get("type", "-")))
-	var floor := int(snapshot.get("floor", -1))
+	var level_index := int(snapshot.get("floor", -1))
 	var x := int(snapshot.get("x", -1))
 	var y := int(snapshot.get("y", -1))
 	var powered_text := "yes" if bool(snapshot.get("powered", false)) else "no"
 	var online_text := "yes" if bool(snapshot.get("online", false)) else "no"
 	inspector_id_label.text = "ID: %s" % id_text
 	inspector_type_label.text = "Type: %s" % type_text
-	inspector_location_label.text = "Location: F%d (%d,%d)" % [floor, x, y]
+	inspector_location_label.text = "Location: F%d (%d,%d)" % [level_index, x, y]
 	inspector_powered_label.text = "Powered: %s" % powered_text
 	inspector_online_label.text = "Online: %s" % online_text
 	var delta_summary := _format_module_deltas(snapshot.get("deltas", {}))
@@ -410,8 +415,8 @@ func _format_module_deltas(deltas: Dictionary) -> String:
 		var value := int(deltas.get(key, 0))
 		if value == 0:
 			continue
-		var sign := "+" if value > 0 else "-"
-		parts.append("%s%s %d" % [sign, key, abs(value)])
+		var delta_sign := "+" if value > 0 else "-"
+		parts.append("%s%s %d" % [delta_sign, key, abs(value)])
 	return ", ".join(parts)
 
 func _vertical_scrollbar() -> VScrollBar:
@@ -419,11 +424,17 @@ func _vertical_scrollbar() -> VScrollBar:
 		return null
 	return scroll_container.get_v_scroll_bar()
 
-func _should_auto_scroll() -> bool:
+func _is_near_bottom() -> bool:
 	var scrollbar: VScrollBar = _vertical_scrollbar()
 	if scrollbar == null:
 		return true
 	return (scrollbar.max_value - scrollbar.value) <= SCROLL_FOLLOW_THRESHOLD
+
+func _should_auto_scroll() -> bool:
+	return _follow_scroll
+
+func _on_scroll_value_changed(_value: float) -> void:
+	_follow_scroll = _is_near_bottom()
 
 func _scroll_ledger_to_bottom_if_following(near_bottom: bool) -> void:
 	if not near_bottom:

@@ -10,7 +10,7 @@ func _load_defaults() -> void:
 	# id, name, power_supply, power_demand, priority, df, dw, dm, dmo, dcap, noise, heat
 	add(_mk("core", "Core", 0, 1, 0, 0, 0, 0, +1, 0, 0, 0))
 	add(_mk("generator", "Generator", 6, 0, 10, 0, 0, 0, -1, 0, 2, 2))
-	add(_mk("housing", "Housing", 0, 1, 80, 0, 0, 0, -1, +3, 1, 0))
+	add(_mk("housing", "Housing", 0, 1, 80, 0, 0, 0, -1, +5, 1, 0))
 	add(_mk("purifier", "Water Purifier", 0, 2, 20, 0, +4, 0, 0, 0, 1, 0))
 	add(_mk("hydro", "Hydroponics", 0, 2, 30, +4, -2, 0, 0, 0, 1, 1))
 	add(_mk("workshop", "Workshop", 0, 2, 60, 0, 0, +3, 0, 0, 2, 2))

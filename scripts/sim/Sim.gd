@@ -78,6 +78,19 @@ const ATTENTION_NEUTRAL_MESSAGE := "Background resonance is steady. Nothing urge
 const ATTENTION_LOW_MESSAGE := "Attention metrics are inching upward. Maintain caution."
 const ATTENTION_WARNING_MESSAGE := "Attention debt building. Forecast: tensions will rise if unchecked."
 const ATTENTION_HIGH_MESSAGE := "Attention debt accruing.\nForecast: When it surfaces, it will surface violently."
+const ATTENTION_METER_MAX: float = 100.0
+const THREAT_METER_MAX: int = 999
+
+const PEOPLE_FIRST_NAMES: Array[String] = [
+	"Ada", "Miles", "Iris", "Jonah", "Mara", "Felix", "Noor", "Reid",
+	"Talia", "Ezra", "Vera", "Rafi", "Lina", "Oren", "Sana", "Pax",
+	"Mina", "Kian", "Etta", "Ronan"
+]
+const PEOPLE_LAST_NAMES: Array[String] = [
+	"Kerr", "Sato", "Nguyen", "Vale", "Torres", "Rowan", "Quinn", "Patel",
+	"Hale", "Yun", "Ortega", "Sol", "Bennett", "Ibrahim", "Cole", "Shaw",
+	"Wright", "Singh", "Park", "Reyes"
+]
 
 const RNG_BASE_MULTIPLIER := 73856093
 const RNG_DAY_MULTIPLIER := 19349663
@@ -95,6 +108,11 @@ const RNG_OFFSET_UNREST_TERMINAL_OUTCOME := 9
 const RNG_OFFSET_ACTIVE_EXPEDITION := 10
 const RNG_OFFSET_COMPLIANCE := 11
 const RNG_OFFSET_MUTINY := 12
+const RNG_OFFSET_EXPEDITION_SURVIVORS := 13
+const RNG_OFFSET_OUTSIDERS := RNG_OFFSET_ACTIVE_EXPEDITION + 400
+const OUTSIDERS_DECISION_DAYS := 3
+const OUTSIDERS_INCIDENT_BONUS := 0.02
+const AWAY_RATIO_THRESHOLD := 0.20
 
 # Expedition state machine states.
 const EXPEDITION_STATE_PLANNED := "PLANNED"
@@ -103,6 +121,50 @@ const EXPEDITION_STATE_ONSITE := "ONSITE"
 const EXPEDITION_STATE_RETURNING := "RETURNING"
 const EXPEDITION_STATE_RESOLVED := "RESOLVED"
 const EXPEDITION_STATE_FAILED := "FAILED"
+
+const EXPEDITION_YIELD_VERSION_LEGACY := 1
+const EXPEDITION_YIELD_VERSION_V2 := 2
+
+const HAUL_BAND_SAFE := {"low": 20.0, "mode": 25.0, "high": 30.0}
+const HAUL_BAND_LOW := {"low": 30.0, "mode": 40.0, "high": 50.0}
+const HAUL_BAND_MEDIUM := {"low": 55.0, "mode": 72.0, "high": 90.0}
+const HAUL_BAND_HIGH := {"low": 85.0, "mode": 110.0, "high": 140.0}
+
+const DURATION_BASELINE_HOURS := 12.0
+const DURATION_FACTOR_MIN := 0.8
+const DURATION_FACTOR_MAX := 1.5
+const DURATION_FACTOR_SCALE := 0.35
+
+const RISK_VARIANCE_SCALE: Array[float] = [0.0, 0.05, 0.12, 0.22]
+
+const CREW_EFFICIENCY_SCALE := 0.15
+const CREW_FACTOR_MAX := 1.4
+
+const ALLOCATION_JITTER_RANGE := 0.08
+
+const RISK_ATTENTION_BASE: Array[float] = [0.0, 1.0, 3.0, 6.0]
+const RISK_ATTENTION_PER_HAUL: Array[float] = [0.0, 0.02, 0.04, 0.08]
+const RISK_ATTENTION_CAP: Array[float] = [0.0, 4.0, 10.0, 20.0]
+
+const PARTIAL_LOSS_THRESHOLDS: Array[float] = [1.0, 0.92, 0.82, 0.70]
+const PARTIAL_LOSS_RETAIN_MIN: Array[float] = [1.0, 0.85, 0.70, 0.40]
+const PARTIAL_LOSS_RETAIN_MAX: Array[float] = [1.0, 0.95, 0.85, 0.70]
+
+const INJURY_CHANCE_BASE: Array[float] = [0.0, 0.02, 0.06, 0.12]
+const INJURY_FATALITY_GIVEN_INJURY := 0.15
+
+const FATIGUE_BASE: Array[int] = [0, 1, 2, 4]
+
+const EXPEDITION_RISK_LABELS := {
+	0: "safe",
+	1: "low",
+	2: "medium",
+	3: "high",
+}
+
+const RNG_OFFSET_ACTIVE_EXPEDITION_ALLOCATION := RNG_OFFSET_ACTIVE_EXPEDITION + 100
+const RNG_OFFSET_ACTIVE_EXPEDITION_RISK := RNG_OFFSET_ACTIVE_EXPEDITION + 200
+const RNG_OFFSET_ACTIVE_EXPEDITION_INJURY := RNG_OFFSET_ACTIVE_EXPEDITION + 300
 
 const PRODUCTION_HOUR_MIN := 3
 const PRODUCTION_HOUR_MAX := 7
@@ -175,6 +237,7 @@ const CMD_SET_MODULE_ENABLED := "SET_MODULE_ENABLED"
 const CMD_SET_MODULE_PRIORITY := "SET_MODULE_PRIORITY"
 const CMD_EXPEDITION := "EXPEDITION"
 const CMD_TRADE := "TRADE"
+const CMD_OUTSIDERS_DECISION := "OUTSIDERS_DECISION"
 
 const LEVER_RATION_HARDENING := LeverDefsRef.LEVER_RATION_HARDENING
 const LEVER_LABOR_OVERDRIVE := LeverDefsRef.LEVER_LABOR_OVERDRIVE
@@ -339,6 +402,9 @@ var expedition_happened_today: bool = false
 # Map and active expeditions (state machine driven).
 var map_def: MapDefRef = null
 var active_expedition: Dictionary = {}  # Single active expedition; empty if none.
+var location_heat: Dictionary = {}
+var pending_outsiders: Dictionary = {}
+var rejected_outsiders_days_left: int = 0
 var expedition_id_counter: int = 0
 
 # Lagged consequences for expeditions (persistent, deterministic queue)
@@ -390,6 +456,8 @@ var abandoned_modules: Dictionary = {}
 var conversion_scar: int = 0
 var conversion_burn_counts: Dictionary = {}
 var pending_conversions: Array[Dictionary] = []
+var _people: Array[Dictionary] = []
+var _next_person_id: int = 1
 
 func _ready() -> void:
 	_setup_default_state()
@@ -455,8 +523,241 @@ func _setup_default_state() -> void:
 	res.materials = 220
 	res.morale = 65
 	res.population = 6
+	_reset_people_state(res.population)
 
 	_refresh_module_snapshots({})
+
+func _reset_people_state(initial_population: int) -> void:
+	_people.clear()
+	_next_person_id = 1
+	_sync_people_to_population(max(initial_population, 0))
+
+func _sync_people_to_population(target_population: int) -> void:
+	var target: int = max(target_population, 0)
+	if _people.size() < target:
+		_add_people(target - _people.size())
+	elif _people.size() > target:
+		_trim_people_to_population(target)
+
+func _trim_people_to_population(target_population: int) -> void:
+	var target: int = max(target_population, 0)
+	while _people.size() > target:
+		_people.pop_back()
+	_next_person_id = max(_next_person_id, _people.size() + 1)
+
+func _add_people(count: int) -> void:
+	var safe_count: int = max(count, 0)
+	for _i in range(safe_count):
+		var person_id := _next_person_id
+		_next_person_id += 1
+		_people.append(_make_person(person_id))
+
+func _make_person(person_id: int) -> Dictionary:
+	var index: int = max(person_id - 1, 0)
+	var first_idx := int(index % PEOPLE_FIRST_NAMES.size())
+	var last_idx: int = int(floor(float(index) / float(PEOPLE_FIRST_NAMES.size()))) % PEOPLE_LAST_NAMES.size()
+	var first := PEOPLE_FIRST_NAMES[first_idx]
+	var last := PEOPLE_LAST_NAMES[last_idx]
+	return {
+		"id": person_id,
+		"first": first,
+		"last": last,
+		"name": "%s %s" % [first, last],
+	}
+
+func _current_housing_capacity() -> int:
+	if tower == null or db == null:
+		return 0
+	var total_capacity := 0
+	for f in range(tower.floors.size()):
+		var floor_data: Variant = tower.floors[f]
+		if floor_data == null or not (floor_data is Array):
+			continue
+		var grid: Array = floor_data as Array
+		for y in range(tower.height):
+			if y < 0 or y >= grid.size():
+				continue
+			var row_candidate: Variant = grid[y]
+			if row_candidate == null or not (row_candidate is Array):
+				continue
+			var row: Array = row_candidate as Array
+			for x in range(tower.width):
+				if x < 0 or x >= row.size():
+					continue
+				var module_id: Variant = row[x]
+				if module_id == null:
+					continue
+				if _is_module_abandoned(f, x, y):
+					continue
+				if not tower.is_module_enabled(f, x, y):
+					continue
+				var def: ModuleDef = db.get_def(str(module_id))
+				if def == null:
+					continue
+				total_capacity += def.delta_capacity
+	return total_capacity
+
+func _roll_expedition_survivors(expedition_id: int) -> int:
+	var tracker := _create_rng_tracker(day, PHASE_EXPEDITIONS, "expedition_survivors_%d" % expedition_id, RNG_OFFSET_EXPEDITION_SURVIVORS)
+	var roll := int(_rng_randi(tracker) % 100)
+	if roll < 50:
+		return 1
+	if roll < 80:
+		return 2
+	if roll < 90:
+		return 3
+	if roll < 95:
+		return 4
+	if roll < 98:
+		return 5
+	return 6
+
+func _apply_expedition_survivors(survivors_gained: int) -> void:
+	if res == null:
+		return
+	if survivors_gained <= 0:
+		return
+	var population_before := res.population
+	res.population += survivors_gained
+	_add_people(survivors_gained)
+	active_expedition["survivors_gained"] = survivors_gained
+	_apply_overcrowding_penalty(population_before)
+
+func _apply_overcrowding_penalty(population_before: int) -> void:
+	if res == null:
+		return
+	var capacity := _current_housing_capacity()
+	if capacity <= 0:
+		return
+	var previous_home_population: int = maxi(population_before - _current_away_crew(), 0)
+	if previous_home_population > capacity:
+		return
+	var home_population: int = _home_population()
+	if home_population <= capacity:
+		return
+	var over: int = home_population - capacity
+	var morale_penalty: int = max(over, 1)
+	res.morale -= morale_penalty
+	var payload := {
+		"population": res.population,
+		"capacity": capacity,
+		"morale_penalty": morale_penalty,
+	}
+	var message := "Overcrowding after expedition: population %d exceeds housing capacity %d. Build more housing/floors." % [res.population, capacity]
+	_emit_event(
+		"HOUSING_OVERCROWDING",
+		message,
+		"warn",
+		"player_feed",
+		payload,
+		"housing",
+		day,
+		hour_of_day,
+		true
+	)
+
+func _current_away_crew() -> int:
+	if active_expedition.is_empty():
+		return 0
+	var state := str(active_expedition.get("state", ""))
+	if state == EXPEDITION_STATE_RESOLVED or state == EXPEDITION_STATE_FAILED:
+		return 0
+	var party_size: int = int(active_expedition.get("party_size", 0))
+	if party_size <= 0:
+		party_size = int(active_expedition.get("crew", 0))
+	return maxi(party_size, 0)
+
+func _home_population() -> int:
+	if res == null:
+		return 0
+	var total_population: int = int(res.population)
+	return maxi(total_population - _current_away_crew(), 0)
+
+func _max_party_size(total_population: int) -> int:
+	var safe_total: int = maxi(total_population, 0)
+	if safe_total <= 0:
+		return 0
+	var scaled: float = float(safe_total) * 0.33
+	var max_by_pop: int = int(floor(scaled))
+	var cap_by_rule: int = max_by_pop
+	if cap_by_rule > 10:
+		cap_by_rule = 10
+	return maxi(1, cap_by_rule)
+
+func _party_size_multiplier(party_size: int) -> float:
+	if party_size <= 4:
+		return 1.0
+	if party_size <= 7:
+		return 0.9
+	return 0.8
+
+func _expedition_party_size(expedition: Dictionary) -> int:
+	if expedition == null or expedition.is_empty():
+		return 0
+	var party_size: int = int(expedition.get("party_size", 0))
+	if party_size <= 0:
+		party_size = int(expedition.get("crew", 0))
+	return maxi(party_size, 0)
+
+func _get_location_heat(location_id: String) -> int:
+	if location_id == "":
+		return 0
+	var value: Variant = location_heat.get(location_id, 0)
+	return maxi(int(value), 0)
+
+func _increment_location_heat(location_id: String) -> int:
+	if location_id == "":
+		return 0
+	var current: int = _get_location_heat(location_id)
+	var next_value: int = current + 1
+	location_heat[location_id] = next_value
+	return next_value
+
+func _decay_location_heat() -> void:
+	if location_heat.is_empty():
+		return
+	var keys: Array = location_heat.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var current: int = maxi(int(location_heat.get(key, 0)), 0)
+		var next_value: int = maxi(current - 1, 0)
+		if next_value <= 0:
+			location_heat.erase(key)
+		else:
+			location_heat[key] = next_value
+
+func _string_seed(source: String) -> int:
+	var accumulator: int = 0
+	for i in range(source.length()):
+		accumulator = int((accumulator * 31 + source.unicode_at(i)) & RNG_CONTEXT_SEED_MASK)
+	return accumulator
+
+func _outsiders_seed(
+	expedition_id: int,
+	destination_id: String,
+	return_hour_index: int,
+	party_size: int,
+	heat: int
+) -> int:
+	var accumulator: int = int(sim_seed)
+	accumulator += expedition_id * 83492791
+	accumulator += return_hour_index * 2654435761
+	accumulator += party_size * 15485863
+	accumulator += heat * 49979687
+	accumulator += _string_seed(destination_id)
+	accumulator = int((accumulator * RNG_BASE_MULTIPLIER) & RNG_CONTEXT_SEED_MASK)
+	return accumulator
+
+func _away_ratio(total_population: int) -> float:
+	var safe_total: int = maxi(total_population, 0)
+	if safe_total <= 0:
+		return 0.0
+	var away: int = _current_away_crew()
+	if away <= 0:
+		return 0.0
+	return float(away) / float(safe_total)
 
 func _reset_policies_and_pools() -> void:
 	food_ration = 1.0
@@ -503,6 +804,9 @@ func _reset_policies_and_pools() -> void:
 	expedition_happened_today = false
 	expedition_counter = 0
 	active_expedition.clear()
+	location_heat.clear()
+	pending_outsiders.clear()
+	rejected_outsiders_days_left = 0
 	expedition_id_counter = 0
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
@@ -558,6 +862,9 @@ func _reset_policies_and_pools() -> void:
 
 func _begin_day(sim_day: int) -> void:
 	production_executed_today = false
+	_decay_location_heat()
+	if rejected_outsiders_days_left > 0:
+		rejected_outsiders_days_left = maxi(rejected_outsiders_days_left - 1, 0)
 	_prepare_daily_rolls(sim_day)
 	_daily_food_consumed = 0
 	_daily_water_consumed = 0
@@ -830,10 +1137,16 @@ func get_last_production_metrics() -> Dictionary:
 func get_attention_meter_value() -> float:
 	return expedition_attention
 
+func get_attention_meter_max() -> float:
+	return ATTENTION_METER_MAX
+
 func get_threat_meter_value() -> int:
 	if res == null:
 		return 0
 	return int(res.threat)
+
+func get_threat_meter_max() -> int:
+	return THREAT_METER_MAX
 
 func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	var ok := false
@@ -1624,8 +1937,19 @@ func _evaluate_incidents(sim_day: int, run_seed: int, sim_res: Resources) -> Arr
 			continue
 
 		var chance: float = float(incident_def.get("chance", 0.0))
+		var extra_chance: float = 0.0
+		if rejected_outsiders_days_left > 0:
+			extra_chance += OUTSIDERS_INCIDENT_BONUS
+		var away_ratio: float = _away_ratio(int(sim_res.population))
+		if away_ratio > AWAY_RATIO_THRESHOLD:
+			extra_chance += (away_ratio - AWAY_RATIO_THRESHOLD) * 0.50
+		var adjusted_chance: float = chance + extra_chance
+		if adjusted_chance < 0.0:
+			adjusted_chance = 0.0
+		elif adjusted_chance > 1.0:
+			adjusted_chance = 1.0
 		var roll: float = _rng_randf(tracker)
-		if roll <= chance:
+		if roll <= adjusted_chance:
 			var incident_id: String = str(incident_def.get("id", "unknown"))
 			var severity: String = str(incident_def.get("severity", "na"))
 			# Log-only for now (per EVENTS contract: no state mutation without approval).
@@ -1993,6 +2317,8 @@ func _phase_commands(_sim_day: int, _run_seed: int, sim_tower: Tower, sim_res: R
 				_cmd_expedition(cmd.payload, _sim_day, _run_seed, sim_res, obs)
 			CMD_TRADE:
 				_cmd_trade(cmd.payload, sim_res, obs, _sim_day)
+			CMD_OUTSIDERS_DECISION:
+				_cmd_outsiders_decision(cmd.payload, sim_res, obs, _sim_day)
 			_:
 				_obs_push(obs, "CMD:UNKNOWN")
 
@@ -2138,8 +2464,13 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		# Fallback to legacy "target" for backward compatibility during transition.
 		destination_id = str(payload.get("target", ""))
 
-	var requested_crew: int = int(payload.get("crew", 1))
-	var crew: int = int(clamp(requested_crew, 0, sim_res.population))
+	var requested_party_size: int = int(payload.get("party_size", payload.get("crew", 1)))
+	var max_party_size: int = _max_party_size(int(sim_res.population))
+	if max_party_size <= 0:
+		_obs_push(obs, "EXPEDITION_ABORT@NO_CREW")
+		return
+	var party_size: int = clampi(requested_party_size, 1, max_party_size)
+	var crew: int = party_size
 	_obs_push(obs, "CMD:EXPEDITION@%s" % destination_id)
 
 	# Validate destination if map_def is available.
@@ -2199,7 +2530,7 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 
 	# If map_def is available and destination is a map location, use map-driven logic.
 	if map_def != null and map_def.is_valid_destination(destination_id):
-		var result := launch_expedition(destination_id, crew)
+		var result := launch_expedition(destination_id, crew, party_size)
 		if result.get("ok", false):
 			_obs_push(obs, "MAP_EXPEDITION_LAUNCHED@%s" % destination_id)
 		else:
@@ -2207,6 +2538,7 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		return
 
 	# Legacy scav_pools fallback for backward compatibility.
+	var heat_after_launch: int = _increment_location_heat(destination_id)
 	var target := destination_id
 	if not scav_pools.has(target):
 		push_warning("Unknown expedition target '%s' in scav_pools; yield will be zero." % target)
@@ -2222,8 +2554,13 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		bonus_yield = crew * expedition_yield_bonus_per_crew_today
 		if bonus_yield > 0:
 			_obs_push(obs, "EXP_COMPRESS_BONUS@%d" % bonus_yield)
-	var yield_base: int = int(max(crew * 2, 1)) + bonus_yield
-	var yield_amount: int = int(min(remaining, yield_base))
+	var expected_haul: int = (8 * crew) + bonus_yield
+	var multiplier: float = _party_size_multiplier(crew)
+	var heat_multiplier: float = maxf(1.0 - (0.12 * float(heat_after_launch)), 0.0)
+	var capacity_units: int = 12 * crew
+	var raw_haul: float = float(expected_haul) * multiplier * heat_multiplier
+	var haul_units: int = int(min(float(capacity_units), maxf(raw_haul, 0.0)))
+	var yield_amount: int = int(min(remaining, haul_units))
 	scav_pools[target] = remaining - yield_amount
 
 	match target:
@@ -2239,6 +2576,80 @@ func _cmd_expedition(payload: Dictionary, sim_day: int, run_seed: int, sim_res: 
 		_:
 			# Unknown targets drain their pool but don't create new subsystems.
 			_obs_push(obs, "YIELD_UNKNOWN@%d" % yield_amount)
+	var attention_gain: int = 2 + int(ceil(0.6 * float(crew))) + heat_after_launch
+	expedition_attention += float(attention_gain)
+	expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+	_obs_push(obs, "ATTN+%d" % attention_gain)
+
+
+func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array[String], sim_day: int) -> void:
+	if payload == null:
+		return
+	var event_id: int = int(payload.get("event_id", -1))
+	if event_id < 0:
+		_obs_push(obs, "OUTSIDERS_DECISION@INVALID_ID")
+		return
+	if not pending_outsiders.has(event_id):
+		_obs_push(obs, "OUTSIDERS_DECISION@MISSING")
+		return
+	var entry_value: Variant = pending_outsiders.get(event_id, {})
+	var entry: Dictionary = entry_value as Dictionary if entry_value is Dictionary else {}
+	var accept: bool = bool(payload.get("accept", false))
+	var group_size: int = maxi(int(entry.get("group_size", 0)), 0)
+	var base_payload := entry.duplicate(true)
+	base_payload["decision"] = "accept" if accept else "reject"
+	base_payload["event_id"] = event_id
+
+	if accept:
+		var population_before := sim_res.population
+		if group_size > 0:
+			sim_res.population += group_size
+			_add_people(group_size)
+		var food_cost: int = 2 * group_size
+		var water_cost: int = 2 * group_size
+		sim_res.food = maxi(sim_res.food - food_cost, 0)
+		sim_res.water = maxi(sim_res.water - water_cost, 0)
+		var attention_gain: int = 2 + group_size
+		expedition_attention += float(attention_gain)
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		sim_res.morale += 1
+		_apply_overcrowding_penalty(population_before)
+		base_payload["food_cost"] = food_cost
+		base_payload["water_cost"] = water_cost
+		base_payload["attention_gain"] = attention_gain
+		base_payload["morale_delta"] = 1
+		_emit_event(
+			"OUTSIDERS_ACCEPTED",
+			"Outsiders admitted: +%d population." % group_size,
+			"info",
+			"player_feed",
+			base_payload,
+			"expedition",
+			sim_day,
+			hour_of_day,
+			true
+		)
+	else:
+		expedition_attention += 1.0
+		expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+		sim_res.morale -= 2
+		rejected_outsiders_days_left = OUTSIDERS_DECISION_DAYS
+		base_payload["attention_gain"] = 1
+		base_payload["morale_delta"] = -2
+		base_payload["rejected_days"] = OUTSIDERS_DECISION_DAYS
+		_emit_event(
+			"OUTSIDERS_REJECTED",
+			"Outsiders turned away. Rumors spread.",
+			"warn",
+			"player_feed",
+			base_payload,
+			"expedition",
+			sim_day,
+			hour_of_day,
+			true
+		)
+
+	pending_outsiders.erase(event_id)
 
 
 # =============================================================================
@@ -2256,7 +2667,7 @@ func get_active_expedition() -> Dictionary:
 func can_launch_expedition() -> bool:
 	return not has_active_expedition()
 
-func launch_expedition(destination_id: String, crew: int) -> Dictionary:
+func launch_expedition(destination_id: String, crew: int, party_size: int = -1) -> Dictionary:
 	## Attempts to launch an expedition to destination_id with crew members.
 	## Returns {"ok": bool, "message": String, "expedition": Dictionary or null}.
 	var result := {"ok": false, "message": "", "expedition": null}
@@ -2278,29 +2689,45 @@ func launch_expedition(destination_id: String, crew: int) -> Dictionary:
 		result["message"] = "Destination not found: %s" % destination_id
 		return result
 
-	var clamped_crew := int(clamp(crew, 1, res.population))
-	if clamped_crew <= 0:
+	var requested_party_size: int = party_size if party_size > 0 else crew
+	var max_party_size: int = _max_party_size(int(res.population))
+	if max_party_size <= 0:
 		result["message"] = "No crew available."
 		return result
+	var clamped_party_size: int = clampi(requested_party_size, 1, max_party_size)
+	if clamped_party_size <= 0:
+		result["message"] = "No crew available."
+		return result
+	var clamped_crew: int = clamped_party_size
 
 	# Create expedition.
 	expedition_id_counter += 1
 	var exp_id := expedition_id_counter
 	var total_hours := location.total_trip_hours()
 
+	var heat_after_launch: int = _increment_location_heat(destination_id)
 	active_expedition = {
 		"id": exp_id,
 		"destination_id": destination_id,
 		"destination_name": location.name,
 		"crew": clamped_crew,
+		"party_size": clamped_party_size,
 		"state": EXPEDITION_STATE_PLANNED,
+		"yield_version": EXPEDITION_YIELD_VERSION_V2,
+		"start_day": day,
+		"start_hour": hour_index,
 		"start_hour_index": hour_index,
+		"estimated_return_hour": hour_index + total_hours,
 		"distance_hours": location.distance_hours,
 		"onsite_hours": location.onsite_hours,
 		"total_hours": total_hours,
 		"hours_in_state": 0,
 		"risk_level": location.risk_level,
+		"risk_label": str(EXPEDITION_RISK_LABELS.get(location.risk_level, "unknown")),
 		"resources": location.resources.duplicate(true),
+		"weight_profile": location.weight_profile.duplicate(true),
+		"heat_at_launch": heat_after_launch,
+		"yield_bonus_per_crew": expedition_yield_bonus_per_crew_today,
 	}
 
 	# Transition from PLANNED to OUTBOUND immediately.
@@ -2392,21 +2819,360 @@ func _expedition_transition_to(new_state: String) -> void:
 				active_expedition.duplicate(true)
 			)
 
+
+func _triangular_sample(low: float, mode: float, high: float, u: float) -> float:
+	var clamped_low := low
+	var clamped_high := high
+	var clamped_mode: float = clamp(mode, clamped_low, clamped_high)
+	if clamped_high <= clamped_low:
+		return clamped_low
+	var fc: float = (clamped_mode - clamped_low) / (clamped_high - clamped_low)
+	if u < fc:
+		return clamped_low + sqrt(u * (clamped_high - clamped_low) * (clamped_mode - clamped_low))
+	return clamped_high - sqrt((1.0 - u) * (clamped_high - clamped_low) * (clamped_high - clamped_mode))
+
+func _expedition_haul_band_for_risk(risk_level: int) -> Dictionary:
+	match risk_level:
+		0:
+			return HAUL_BAND_SAFE
+		2:
+			return HAUL_BAND_MEDIUM
+		3:
+			return HAUL_BAND_HIGH
+		_:
+			return HAUL_BAND_LOW
+
+func _expedition_duration_factor(distance_hours: int, onsite_hours: int) -> float:
+	var duration_hours: int = (distance_hours * 2) + onsite_hours
+	var normalized_duration: float = float(duration_hours) / DURATION_BASELINE_HOURS
+	var scaled: float = DURATION_FACTOR_MIN + (sqrt(normalized_duration) - 1.0) * DURATION_FACTOR_SCALE
+	return clamp(scaled, DURATION_FACTOR_MIN, DURATION_FACTOR_MAX)
+
+func _expedition_crew_factor(crew: int) -> float:
+	var crew_value: int = int(max(crew, 1))
+	var crew_factor: float = 1.0 + (sqrt(float(crew_value)) - 1.0) * CREW_EFFICIENCY_SCALE
+	return clamp(crew_factor, 1.0, CREW_FACTOR_MAX)
+
+func _calculate_expedition_haul_points(
+	crew: int,
+	risk_level: int,
+	distance_hours: int,
+	onsite_hours: int,
+	tracker: Dictionary
+) -> int:
+	var band := _expedition_haul_band_for_risk(risk_level)
+	var low: float = float(band.get("low", 0.0))
+	var mode: float = float(band.get("mode", 0.0))
+	var high: float = float(band.get("high", 0.0))
+	var u: float = _rng_randf(tracker)
+	var raw_haul: float = _triangular_sample(low, mode, high, u)
+	var variance_roll: float = (_rng_randf(tracker) * 2.0) - 1.0
+	var variance_scale: float = RISK_VARIANCE_SCALE[clamp(risk_level, 0, RISK_VARIANCE_SCALE.size() - 1)]
+	var variance_amplified: float = raw_haul * (1.0 + variance_roll * variance_scale)
+	var duration_factor: float = _expedition_duration_factor(distance_hours, onsite_hours)
+	var crew_factor: float = _expedition_crew_factor(crew)
+	var final_haul: float = variance_amplified * duration_factor * crew_factor
+	return int(round(final_haul))
+
+func _allocate_haul_to_resources(haul_points: int, weight_profile: Dictionary, tracker: Dictionary) -> Dictionary:
+	var allocation: Dictionary = {}
+	if haul_points <= 0 or weight_profile.is_empty():
+		return allocation
+	var keys := weight_profile.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var weight: float = float(weight_profile.get(key, 0.0))
+		if weight <= 0.0:
+			continue
+		var base_share: float = float(haul_points) * weight
+		var jitter: float = (_rng_randf(tracker) * 2.0 - 1.0) * ALLOCATION_JITTER_RANGE
+		var jittered_share: float = base_share * (1.0 + jitter)
+		var final_amount: int = max(0, int(round(jittered_share)))
+		allocation[str(key)] = final_amount
+
+	_reduce_expedition_allocation_excess(allocation, haul_points)
+	return allocation
+
+func _reduce_expedition_allocation_excess(allocation: Dictionary, haul_points: int) -> void:
+	if allocation.is_empty():
+		return
+	var total_allocated: int = 0
+	for amount in allocation.values():
+		total_allocated += int(amount)
+	if total_allocated <= haul_points:
+		return
+
+	var entries: Array = []
+	for key in allocation.keys():
+		entries.append({"key": str(key), "amount": int(allocation.get(key, 0))})
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var amount_a: int = int(a.get("amount", 0))
+		var amount_b: int = int(b.get("amount", 0))
+		if amount_a != amount_b:
+			return amount_a > amount_b
+		return str(a.get("key", "")) < str(b.get("key", ""))
+	)
+
+	var excess: int = total_allocated - haul_points
+	var index: int = 0
+	while excess > 0 and index < entries.size():
+		var entry: Dictionary = entries[index]
+		var key: String = str(entry.get("key", ""))
+		var amount: int = int(entry.get("amount", 0))
+		if amount <= 0:
+			index += 1
+			continue
+		var reduction: int = min(amount, excess)
+		amount -= reduction
+		excess -= reduction
+		allocation[key] = amount
+		entry["amount"] = amount
+		index = (index + 1) if excess > 0 else index
+
+func _apply_expedition_pool_caps(allocation: Dictionary, pool: Dictionary) -> Dictionary:
+	var yields: Dictionary = {}
+	if allocation.is_empty() or pool == null:
+		return yields
+	var keys := allocation.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var amount: int = int(allocation.get(key, 0))
+		if amount <= 0:
+			continue
+		var available: int = int(pool.get(key, 0))
+		if available <= 0:
+			continue
+		var actual: int = min(amount, available)
+		if actual > 0:
+			yields[str(key)] = actual
+		pool[key] = max(available - actual, 0)
+	return yields
+
+func _apply_expedition_partial_loss(yields: Dictionary, risk_level: int, tracker: Dictionary) -> Dictionary:
+	var result: Dictionary = {
+		"yields": yields.duplicate(true),
+		"loss_applied": false,
+		"retain_pct": 1.0,
+	}
+	var threshold: float = PARTIAL_LOSS_THRESHOLDS[clamp(risk_level, 0, PARTIAL_LOSS_THRESHOLDS.size() - 1)]
+	var loss_roll: float = _rng_randf(tracker)
+	if loss_roll < threshold:
+		var min_retain: float = PARTIAL_LOSS_RETAIN_MIN[clamp(risk_level, 0, PARTIAL_LOSS_RETAIN_MIN.size() - 1)]
+		var max_retain: float = PARTIAL_LOSS_RETAIN_MAX[clamp(risk_level, 0, PARTIAL_LOSS_RETAIN_MAX.size() - 1)]
+		var retain_pct: float = lerp(min_retain, max_retain, _rng_randf(tracker))
+		var adjusted: Dictionary = {}
+		var keys := yields.keys()
+		keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+			return str(a) < str(b)
+		)
+		for key in keys:
+			var amount: int = int(yields.get(key, 0))
+			if amount <= 0:
+				continue
+			var reduced: int = int(round(float(amount) * retain_pct))
+			if reduced > 0:
+				adjusted[str(key)] = reduced
+		result["yields"] = adjusted
+		result["loss_applied"] = true
+		result["retain_pct"] = retain_pct
+	return result
+
+func _roll_expedition_injury(risk_level: int, crew: int, tracker: Dictionary) -> Dictionary:
+	var result: Dictionary = {
+		"injury": false,
+		"fatal": false,
+		"crew_lost": 0,
+	}
+	if crew <= 0:
+		return result
+	var injury_chance: float = INJURY_CHANCE_BASE[clamp(risk_level, 0, INJURY_CHANCE_BASE.size() - 1)]
+	var injury_roll: float = _rng_randf(tracker)
+	if injury_roll < injury_chance:
+		result["injury"] = true
+		var fatal_roll: float = _rng_randf(tracker)
+		if fatal_roll < INJURY_FATALITY_GIVEN_INJURY:
+			result["fatal"] = true
+			result["crew_lost"] = 1
+	return result
+
+func _expedition_weight_profile_from_active() -> Dictionary:
+	var profile: Variant = active_expedition.get("weight_profile", {})
+	if profile is Dictionary:
+		return (profile as Dictionary).duplicate(true)
+	var resources_dict: Variant = active_expedition.get("resources", {})
+	if resources_dict is Dictionary:
+		var keys: Array = (resources_dict as Dictionary).keys()
+		var count: int = keys.size()
+		if count > 0:
+			var weight: float = 1.0 / float(count)
+			var fallback: Dictionary = {}
+			for key in keys:
+				fallback[str(key)] = weight
+			return fallback
+	return {}
+
+func _expedition_apply_resource_gain(key: String, amount: int) -> void:
+	if amount <= 0:
+		return
+	match key:
+		"food":
+			res.food += amount
+		"water":
+			res.water += amount
+		"materials":
+			res.materials += amount
+		"silver":
+			res.silver += amount
+		"gold":
+			res.gold += amount
+		_:
+			return
+
+func _format_expedition_yield_summary(yields: Dictionary) -> String:
+	if yields.is_empty():
+		return "nothing"
+	var parts: Array[String] = []
+	var keys := yields.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var amount: int = int(yields.get(key, 0))
+		if amount <= 0:
+			continue
+		parts.append("%s +%d" % [str(key), amount])
+	return ", ".join(parts)
+
+func _expedition_total_yield_units(yields: Dictionary) -> int:
+	var total: int = 0
+	for amount in yields.values():
+		total += int(amount)
+	return total
 func _expedition_apply_onsite_outcome() -> void:
 	## Apply deterministic outcomes at destination (resource yields, risks).
+	var yield_version: int = int(active_expedition.get("yield_version", EXPEDITION_YIELD_VERSION_LEGACY))
+	if yield_version < EXPEDITION_YIELD_VERSION_V2:
+		_expedition_apply_onsite_outcome_v1()
+		return
+
+	var exp_id := int(active_expedition.get("id", 0))
+	var crew := int(active_expedition.get("crew", 1))
+	var party_size: int = _expedition_party_size(active_expedition)
+	var risk_level := int(active_expedition.get("risk_level", 1))
+	var distance_hours := int(active_expedition.get("distance_hours", 1))
+	var onsite_hours := int(active_expedition.get("onsite_hours", 1))
+	var start_day := int(active_expedition.get("start_day", day))
+	var start_hour := int(active_expedition.get("start_hour", active_expedition.get("start_hour_index", hour_index)))
+	var destination_id: String = str(active_expedition.get("destination_id", ""))
+	var heat: int = _get_location_heat(destination_id)
+	var bonus_per_crew: int = int(active_expedition.get("yield_bonus_per_crew", 0))
+	var bonus_yield: int = party_size * bonus_per_crew
+	var expected_haul: int = (8 * party_size) + bonus_yield
+	var multiplier: float = _party_size_multiplier(party_size)
+	var heat_multiplier: float = maxf(1.0 - (0.12 * float(heat)), 0.0)
+	var capacity_units: int = 12 * party_size
+	var raw_haul: float = float(expected_haul) * multiplier * heat_multiplier
+	var haul_points: int = int(min(float(capacity_units), maxf(raw_haul, 0.0)))
+
+	var alloc_tracker := _create_rng_tracker(
+		day,
+		PHASE_EXPEDITIONS,
+		"expedition:%d:allocation:d%dh%d" % [exp_id, start_day, start_hour],
+		RNG_OFFSET_ACTIVE_EXPEDITION_ALLOCATION
+	)
+	var weight_profile: Dictionary = _expedition_weight_profile_from_active()
+	var allocation: Dictionary = _allocate_haul_to_resources(haul_points, weight_profile, alloc_tracker)
+
+	var resources_dict: Variant = active_expedition.get("resources", {})
+	var pool: Dictionary = {}
+	if resources_dict is Dictionary:
+		pool = (resources_dict as Dictionary).duplicate(true)
+	var yields: Dictionary = _apply_expedition_pool_caps(allocation, pool)
+	active_expedition["resources"] = pool
+
+	var risk_tracker := _create_rng_tracker(
+		day,
+		PHASE_EXPEDITIONS,
+		"expedition:%d:risk_outcome:d%dh%d" % [exp_id, start_day, start_hour],
+		RNG_OFFSET_ACTIVE_EXPEDITION_RISK
+	)
+	var injury_tracker := _create_rng_tracker(
+		day,
+		PHASE_EXPEDITIONS,
+		"expedition:%d:injury_roll:d%dh%d" % [exp_id, start_day, start_hour],
+		RNG_OFFSET_ACTIVE_EXPEDITION_INJURY
+	)
+
+	var loss_result: Dictionary = _apply_expedition_partial_loss(yields, risk_level, risk_tracker)
+	var final_yields: Dictionary = loss_result.get("yields", {}) if loss_result.get("yields", null) is Dictionary else {}
+	var loss_applied: bool = bool(loss_result.get("loss_applied", false))
+	var retain_pct: float = float(loss_result.get("retain_pct", 1.0))
+
+	var injury_result: Dictionary = _roll_expedition_injury(risk_level, crew, injury_tracker)
+	var crew_lost: int = int(injury_result.get("crew_lost", 0))
+	if crew_lost > 0:
+		active_expedition["crew_lost"] = crew_lost
+		active_expedition["crew"] = max(crew - crew_lost, 0)
+
+	var attention_base_value: int = 2 + int(ceil(0.6 * float(party_size))) + heat
+	var attention_gained: float = float(maxi(attention_base_value, 0))
+
+	var fatigue_penalty: int = FATIGUE_BASE[clamp(risk_level, 0, FATIGUE_BASE.size() - 1)]
+	if float((distance_hours * 2) + onsite_hours) > (DURATION_BASELINE_HOURS * 1.5):
+		fatigue_penalty += 1
+	if bool(injury_result.get("injury", false)) and not bool(injury_result.get("fatal", false)):
+		fatigue_penalty += 2
+
+	active_expedition["haul_points"] = haul_points
+	active_expedition["capacity_units"] = capacity_units
+	active_expedition["expected_haul"] = expected_haul
+	active_expedition["location_heat"] = heat
+	active_expedition["yields"] = final_yields.duplicate(true)
+	active_expedition["attention_gained"] = attention_gained
+	active_expedition["fatigue_penalty"] = fatigue_penalty
+	active_expedition["loss_applied"] = loss_applied
+	active_expedition["retain_pct"] = retain_pct
+	active_expedition["injury"] = bool(injury_result.get("injury", false))
+	active_expedition["fatality"] = bool(injury_result.get("fatal", false))
+	active_expedition["crew_lost"] = crew_lost
+
+	if loss_applied:
+		_emit_expedition_event(
+			"EXPEDITION_LOSS",
+			"Expedition suffered partial losses en route.",
+			"warn",
+			active_expedition.duplicate(true)
+		)
+
+	if bool(injury_result.get("injury", false)):
+		var injury_message := "Expedition reported an injury."
+		var injury_event := "EXPEDITION_INJURY"
+		if bool(injury_result.get("fatal", false)):
+			injury_message = "Expedition reported a fatality."
+			injury_event = "EXPEDITION_FATALITY"
+		_emit_expedition_event(
+			injury_event,
+			injury_message,
+			"warn",
+			active_expedition.duplicate(true)
+		)
+
+func _expedition_apply_onsite_outcome_v1() -> void:
 	var exp_id := int(active_expedition.get("id", 0))
 	var crew := int(active_expedition.get("crew", 1))
 	var risk_level := int(active_expedition.get("risk_level", 1))
-	var _dest_id: String = str(active_expedition.get("destination_id", ""))
 
-	# Deterministic RNG for this expedition outcome.
 	var tracker := _create_rng_tracker(
-		day, PHASE_EXPEDITIONS,
+		day,
+		PHASE_EXPEDITIONS,
 		"expedition:%d:onsite:t%d" % [exp_id, hour_index],
 		RNG_OFFSET_ACTIVE_EXPEDITION
 	)
 
-	# Calculate yields from destination resources.
 	var resources_dict: Variant = active_expedition.get("resources", {})
 	var yields: Dictionary = {}
 	if resources_dict is Dictionary:
@@ -2416,21 +3182,17 @@ func _expedition_apply_onsite_outcome() -> void:
 			var available := int(resources_dict.get(res_key, 0))
 			if available <= 0:
 				continue
-			# Base yield: crew * 3, capped by available.
 			var base_yield := crew * 3
 			var yield_amount := int(min(base_yield, available))
 			if yield_amount > 0:
 				yields[res_key] = yield_amount
-				# Deplete from expedition's tracked resources.
 				active_expedition["resources"][res_key] = available - yield_amount
 
 	active_expedition["yields"] = yields.duplicate(true)
 
-	# Risk check: chance of failure or casualty based on risk_level.
 	var failure_roll := _rng_randf(tracker)
-	var failure_chance := float(risk_level) * 0.05  # 0%, 5%, 10%, 15% for levels 0-3.
+	var failure_chance := float(risk_level) * 0.05
 	if failure_roll < failure_chance:
-		# Expedition partially fails (reduced yield, possible crew loss).
 		var casualty_roll := _rng_randf(tracker)
 		if casualty_roll < 0.3 and crew > 1:
 			active_expedition["crew_lost"] = 1
@@ -2442,7 +3204,6 @@ func _expedition_apply_onsite_outcome() -> void:
 				active_expedition.duplicate(true)
 			)
 		else:
-			# Reduce yields by half.
 			for key in yields.keys():
 				yields[key] = int(yields[key] / 2)
 			active_expedition["yields"] = yields.duplicate(true)
@@ -2459,49 +3220,195 @@ func _expedition_resolve() -> void:
 	var _dest_id: String = str(active_expedition.get("destination_id", ""))
 	var _crew := int(active_expedition.get("crew", 0))
 	var crew_lost := int(active_expedition.get("crew_lost", 0))
-	var yields: Variant = active_expedition.get("yields", {})
+	var expedition_id := int(active_expedition.get("id", 0))
+	var survivors_gained := _roll_expedition_survivors(expedition_id)
+	var yields: Dictionary = {}
+	var yields_variant: Variant = active_expedition.get("yields", {})
+	if yields_variant is Dictionary:
+		yields = (yields_variant as Dictionary).duplicate(true)
 
-	# Apply resource gains.
-	var yield_summary_parts: Array[String] = []
-	if yields is Dictionary:
-		var yield_keys: Array = yields.keys()
-		yield_keys.sort()
-		for key in yield_keys:
-			var amount := int(yields.get(key, 0))
-			if amount <= 0:
-				continue
-			match key:
-				"food":
-					res.food += amount
-				"water":
-					res.water += amount
-				"materials":
-					res.materials += amount
-			yield_summary_parts.append("%s +%d" % [key, amount])
+	var yield_version: int = int(active_expedition.get("yield_version", EXPEDITION_YIELD_VERSION_LEGACY))
+	var yield_summary: String = _format_expedition_yield_summary(yields)
 
-	# Apply population loss if any.
-	if crew_lost > 0:
-		res.population = max(res.population - crew_lost, 0)
+	if yield_version >= EXPEDITION_YIELD_VERSION_V2:
+		for key in yields.keys():
+			var amount: int = int(yields.get(key, 0))
+			_expedition_apply_resource_gain(str(key), amount)
+
+		var attention_gained: float = float(active_expedition.get("attention_gained", 0.0))
+		if attention_gained > 0.0:
+			expedition_attention += attention_gained
+			expedition_attention = snapped(expedition_attention, SIM_FLOAT_SNAP)
+
+		var fatigue_penalty: int = int(active_expedition.get("fatigue_penalty", 0))
+		if fatigue_penalty > 0:
+			res.morale -= fatigue_penalty
+
+		if crew_lost > 0:
+			res.population = max(res.population - crew_lost, 0)
+			_sync_people_to_population(res.population)
+
+		_apply_expedition_survivors(survivors_gained)
+
+		var loss_applied: bool = bool(active_expedition.get("loss_applied", false))
+		var retain_pct: float = float(active_expedition.get("retain_pct", 1.0))
+		var injury: bool = bool(active_expedition.get("injury", false))
+		var fatality: bool = bool(active_expedition.get("fatality", false))
+
+		var outcome_tone := "successful"
+		if crew_lost > 0 or fatality or injury:
+			outcome_tone = "costly"
+		elif loss_applied:
+			outcome_tone = "troubled"
+
+		var cost_parts: Array[String] = []
+		if attention_gained > 0.0:
+			cost_parts.append("+%.1f attention" % attention_gained)
+		if fatigue_penalty > 0:
+			cost_parts.append("-%d morale (fatigue)" % fatigue_penalty)
+		if loss_applied:
+			var lost_pct: int = int(round((1.0 - retain_pct) * 100.0))
+			cost_parts.append("%d%% haul lost" % lost_pct)
+		if crew_lost > 0:
+			cost_parts.append("%d crew lost" % crew_lost)
+		elif injury:
+			cost_parts.append("crew injured")
+
+		var total_units: int = _expedition_total_yield_units(yields)
+		var total_summary: String = "%d units gathered" % total_units
+
+		var message := "Expedition #%d returned from %s.\nHaul: %s\nOutcome: %s" % [
+			int(active_expedition.get("id", 0)),
+			dest_name,
+			yield_summary,
+			outcome_tone.capitalize()
+		]
+		if cost_parts.size() > 0:
+			message += "\nCosts: %s" % ", ".join(cost_parts)
+		if survivors_gained > 0:
+			message += "\nSurvivors: +%d" % survivors_gained
+
+		var payload := active_expedition.duplicate(true)
+		payload["yields"] = yields.duplicate(true)
+		payload["total_haul_summary"] = total_summary
+		payload["costs_incurred"] = {
+			"attention_gained": attention_gained,
+			"fatigue_applied": fatigue_penalty,
+			"loss_applied": loss_applied,
+			"injury": injury,
+			"fatality": fatality,
+			"crew_lost": crew_lost,
+		}
+		payload["outcome_tone"] = outcome_tone
+
+		_emit_expedition_event(
+			"EXPEDITION_RESOLVED",
+			message,
+			"info",
+			payload
+		)
+	else:
+		# Legacy resolution.
+		var yield_summary_parts: Array[String] = []
+		if yields_variant is Dictionary:
+			var yield_keys: Array = yields.keys()
+			yield_keys.sort()
+			for key in yield_keys:
+				var amount := int(yields.get(key, 0))
+				if amount <= 0:
+					continue
+				match key:
+					"food":
+						res.food += amount
+					"water":
+						res.water += amount
+					"materials":
+						res.materials += amount
+				yield_summary_parts.append("%s +%d" % [key, amount])
+
+		if crew_lost > 0:
+			res.population = max(res.population - crew_lost, 0)
+			_sync_people_to_population(res.population)
+
+		_apply_expedition_survivors(survivors_gained)
+
+		active_expedition["state"] = EXPEDITION_STATE_RESOLVED
+
+		var legacy_summary := ", ".join(yield_summary_parts) if not yield_summary_parts.is_empty() else "nothing"
+		var legacy_message := "Expedition returned from %s. Yielded: %s." % [dest_name, legacy_summary]
+		if crew_lost > 0:
+			legacy_message += " Lost %d crew." % crew_lost
+		if survivors_gained > 0:
+			legacy_message += " Survivors: +%d." % survivors_gained
+
+		_emit_expedition_event(
+			"EXPEDITION_RESOLVED",
+			legacy_message,
+			"info",
+			active_expedition.duplicate(true)
+		)
 
 	# Mark as resolved.
+	_maybe_queue_outsiders_event()
 	active_expedition["state"] = EXPEDITION_STATE_RESOLVED
-
-	var yield_summary := ", ".join(yield_summary_parts) if not yield_summary_parts.is_empty() else "nothing"
-	var message := "Expedition returned from %s. Yielded: %s." % [dest_name, yield_summary]
-	if crew_lost > 0:
-		message += " Lost %d crew." % crew_lost
-
-	_emit_expedition_event(
-		"EXPEDITION_RESOLVED",
-		message,
-		"info",
-		active_expedition.duplicate(true)
-	)
 
 	# Clamp resources.
 	res.clamp_all()
 
 	# Clear expedition in next tick.
+
+func _maybe_queue_outsiders_event() -> void:
+	if res == null:
+		return
+	if active_expedition.is_empty():
+		return
+	var expedition_id: int = int(active_expedition.get("id", 0))
+	var destination_id: String = str(active_expedition.get("destination_id", ""))
+	if destination_id == "":
+		return
+	if pending_outsiders.has(expedition_id):
+		return
+	var party_size: int = _expedition_party_size(active_expedition)
+	var heat: int = _get_location_heat(destination_id)
+	var chance: float = 0.10 + (0.02 * float(party_size)) + (0.05 * float(heat))
+	if chance < 0.0:
+		chance = 0.0
+	elif chance > 1.0:
+		chance = 1.0
+	var return_hour_index: int = int(active_expedition.get("estimated_return_hour", hour_index))
+	var seed_value: int = _outsiders_seed(expedition_id, destination_id, return_hour_index, party_size, heat)
+	var context := "outsiders:%d:%s:h%d:ps%d:ht%d" % [expedition_id, destination_id, return_hour_index, party_size, heat]
+	var tracker := _create_rng_tracker(day, PHASE_EXPEDITIONS, context, RNG_OFFSET_OUTSIDERS, seed_value)
+	var roll: float = _rng_randf(tracker)
+	if roll > chance:
+		return
+	var group_size: int = 1 + int(_rng_randi(tracker) % 3)
+	var entry := {
+		"id": expedition_id,
+		"expedition_id": expedition_id,
+		"destination_id": destination_id,
+		"group_size": group_size,
+		"created_day": day,
+		"created_hour": hour_of_day,
+		"chance": chance,
+		"roll": roll,
+		"party_size": party_size,
+		"heat": heat,
+	}
+	pending_outsiders[expedition_id] = entry
+	var dest_name: String = str(active_expedition.get("destination_name", "unknown"))
+	var message := "Outsiders at the gate: %d from %s await a decision." % [group_size, dest_name]
+	_emit_event(
+		"OUTSIDERS_AT_GATE",
+		message,
+		"info",
+		"player_feed",
+		entry.duplicate(true),
+		"expedition",
+		day,
+		hour_of_day,
+		true
+	)
 
 func _emit_expedition_event(event_type: String, message: String, severity: String, payload: Dictionary) -> void:
 	_emit_event(
@@ -2530,6 +3437,42 @@ func get_map_edges() -> Array[Dictionary]:
 	if map_def == null:
 		return []
 	return map_def.get_edges()
+
+func get_pending_outsiders() -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	if pending_outsiders.is_empty():
+		return results
+	var keys: Array = pending_outsiders.keys()
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return str(a) < str(b)
+	)
+	for key in keys:
+		var entry_value: Variant = pending_outsiders.get(key, {})
+		if entry_value is Dictionary:
+			results.append((entry_value as Dictionary).duplicate(true))
+	return results
+
+func queue_outsiders_decision(event_id: int, accept: bool) -> Dictionary:
+	var result := {"ok": false, "message": "INVALID"}
+	if event_id < 0:
+		result["message"] = "INVALID EVENT"
+		return result
+	if not pending_outsiders.has(event_id):
+		result["message"] = "NO PENDING EVENT"
+		return result
+	var payload := {
+		"event_id": event_id,
+		"accept": accept,
+	}
+	enqueue_command(SimCommand.new(CMD_OUTSIDERS_DECISION, payload))
+	result["ok"] = true
+	result["message"] = "OUTSIDERS DECISION QUEUED"
+	return result
+
+func get_max_party_size() -> int:
+	if res == null:
+		return 1
+	return _max_party_size(int(res.population))
 
 
 func _log_trade_event(sim_day: int, message: String, severity: String, payload: Dictionary) -> void:
@@ -3129,7 +4072,8 @@ func _phase_pressure_accrual(
 	# Process any due lagged expedition consequences deterministically.
 	_phase_delayed_consequences(sim_day, sim_res, obs)
 
-	if total_capacity < sim_res.population:
+	var home_population: int = _home_population()
+	if total_capacity < home_population:
 		_apply_throttled_morale_penalty(sim_res, 2, obs, "CAPACITY")
 		_obs_push(obs, "CAPACITY_SHORTFALL")
 
@@ -3255,6 +4199,7 @@ func _phase_resolution(sim_res: Resources, growth: Dictionary, obs: Array[String
 	if pop_loss > 0:
 		sim_res.population = max(sim_res.population - pop_loss, 0)
 		_obs_push(obs, "POP_LOSS@%d" % pop_loss)
+		_sync_people_to_population(sim_res.population)
 
 	sim_res.clamp_all()
 
@@ -3328,6 +4273,7 @@ func _run_civil_unrest_terminal(sim_day: int, sim_res: Resources, obs: Array[Str
 	var outcome := EXIT_MUTINY if outcome_roll < 0.5 else EXIT_EXILE
 	exit_reason = outcome
 	sim_res.population = 0
+	_sync_people_to_population(sim_res.population)
 	var payload := {
 		"unrest_days": unrest_days,
 		"roll": terminal_roll,
@@ -3357,6 +4303,7 @@ func _apply_unrest_pop_loss(obs: Array[String]) -> void:
 	res.population = max(res.population - CIVIL_UNREST_POP_LOSS_DEFAULT, 0)
 	if res.population < before_pop:
 		_obs_push(obs, "UNREST_POP_LOSS@%d" % CIVIL_UNREST_POP_LOSS_DEFAULT)
+		_sync_people_to_population(res.population)
 
 func _apply_unrest_module_sabotage(sim_tower: Tower, sim_db: ModuleDB, obs: Array[String]) -> Dictionary:
 	if sim_tower == null or sim_db == null:
@@ -3549,6 +4496,30 @@ func _state_signature() -> String:
 		parts.append("active_exp_state=%s" % str(active_expedition.get("state", "")))
 		parts.append("active_exp_dest=%s" % str(active_expedition.get("destination_id", "")))
 		parts.append("active_exp_hours=%d" % int(active_expedition.get("hours_in_state", 0)))
+	parts.append("rejected_outsiders_days=%d" % rejected_outsiders_days_left)
+	if not location_heat.is_empty():
+		var heat_keys := location_heat.keys()
+		heat_keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+			return str(a) < str(b)
+		)
+		for key in heat_keys:
+			parts.append("heat:%s=%d" % [str(key), int(location_heat.get(key, 0))])
+	if not pending_outsiders.is_empty():
+		var outsider_keys := pending_outsiders.keys()
+		outsider_keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+			return str(a) < str(b)
+		)
+		for key in outsider_keys:
+			var entry_value: Variant = pending_outsiders.get(key, {})
+			if entry_value is Dictionary:
+				var entry: Dictionary = entry_value as Dictionary
+				parts.append(
+					"outsiders:%s@%d@%s" % [
+						str(entry.get("id", key)),
+						int(entry.get("group_size", 0)),
+						str(entry.get("destination_id", ""))
+					]
+				)
 	var abandoned_keys := abandoned_modules.keys()
 	abandoned_keys.sort()
 	for key in abandoned_keys:

@@ -711,6 +711,12 @@ func _refresh_conversion_options() -> void:
 	var burns_variant: Variant = sim.get("conversion_burn_counts") if sim != null else null
 	var burns: Dictionary = burns_variant if burns_variant is Dictionary else {}
 	var previously_selected := _selected_conversion_key()
+	var previous_trade_action := ""
+	var previous_trade_resource := ""
+	if trade_direction != null and trade_direction.selected >= 0:
+		previous_trade_action = trade_direction.get_item_text(trade_direction.selected)
+	if trade_resource != null and trade_resource.selected >= 0:
+		previous_trade_resource = trade_resource.get_item_text(trade_resource.selected)
 	conversion_from.clear()
 	for key in RESOURCE_OPTIONS:
 		var count: int = _variant_to_int(burns.get(key, 0))
@@ -743,13 +749,25 @@ func _refresh_conversion_options() -> void:
 		trade_direction.clear()
 		for action in TRADE_ACTIONS:
 			trade_direction.add_item(action)
-		trade_direction.select(0)
+		var action_index := 0
+		if previous_trade_action != "":
+			for idx in range(trade_direction.get_item_count()):
+				if trade_direction.get_item_text(idx) == previous_trade_action:
+					action_index = idx
+					break
+		trade_direction.select(action_index)
 
 	if trade_resource != null:
 		trade_resource.clear()
 		for resource in TRADE_RESOURCE_OPTIONS:
 			trade_resource.add_item(resource)
-		trade_resource.select(0)
+		var resource_index := 0
+		if previous_trade_resource != "":
+			for idx in range(trade_resource.get_item_count()):
+				if trade_resource.get_item_text(idx) == previous_trade_resource:
+					resource_index = idx
+					break
+		trade_resource.select(resource_index)
 
 	if trade_amount != null:
 		trade_amount.min_value = 1

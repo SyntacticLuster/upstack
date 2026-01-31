@@ -165,7 +165,7 @@ size_flags_horizontal = 3
 
 [node name="ThreatMeter" type="VBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters"]
 custom_constants/separation = 4
-tooltip_text = "External threat level (0-100)."
+tooltip_text = "External threat level (0-999)."
 
 [node name="ThreatHeader" type="HBoxContainer" parent="Root/MainRow/LeftRailPanel/LeftRailRoot/ExpandedRail/ResourceMeters/ThreatMeter"]
 custom_constants/separation = 6

@@ -1,0 +1,698 @@
+# UPSTACK Spec: People System (Persistent Identities) + Party Size UI Wiring
+# Version: 1.0.0
+# Date: 2026-01-31
+# Thread Type: SPEC
+# Mode: Feature Mode
+
+overview:
+  summary: >
+    Defines a minimal persistent People System where tower inhabitants have
+    stable identities (names, IDs) across the simulation. Expeditions track
+    which specific individuals are assigned (member_ids), injury/death events
+    reference people by name, and outsider events attach to named pending
+    individuals. Includes UI requirements for party size selection at
+    expedition launch and display of crew names in logs.
+
+  design_goals:
+    - People have persistent identities tied to deterministic name generation
+    - Expeditions reference specific people (member_ids), not anonymous headcounts
+    - Injury/death events name the affected individual
+    - Outsiders have pre-assigned identities before acceptance decision
+    - Party size is player-selectable via UI before expedition launch
+    - All RNG calls deterministic; no nondeterministic dictionary iteration
+    - Logs and events show human-readable names
+
+  constraints:
+    - No morale/ideology meters per person; people are identity + status only
+    - Keep roster lightweight: id, name, status, location
+    - Avoid deep RPG systems; only observable mechanical outcomes
+    - Warnings-as-errors: explicit typing everywhere
+    - Minimal migration burden for existing saves
+
+# =============================================================================
+# DATA MODEL
+# =============================================================================
+
+data_model:
+  description: >
+    Defines the schema for people roster, expedition membership, and pending
+    outsiders. All arrays MUST be iterated in ID order to ensure determinism.
+
+  person_schema:
+    description: "Single person entry in the roster"
+    fields:
+      id:
+        type: int
+        description: "Unique persistent ID, monotonically increasing"
+        required: true
+      first:
+        type: String
+        description: "First name from deterministic name pool"
+        required: true
+      last:
+        type: String
+        description: "Last name from deterministic name pool"
+        required: true
+      name:
+        type: String
+        description: "Formatted full name: '{first} {last}'"
+        required: true
+      status:
+        type: String
+        enum: ["home", "away", "injured", "dead"]
+        description: >
+          Current status. 'home' = available at tower. 'away' = on expedition.
+          'injured' = recovering (future: may reduce availability).
+          'dead' = removed from active roster but preserved for log integrity.
+        required: true
+        default: "home"
+      joined_day:
+        type: int
+        description: "Simulation day when this person joined the tower"
+        required: true
+      death_day:
+        type: int
+        description: "Simulation day of death, -1 if alive"
+        required: false
+        default: -1
+      death_cause:
+        type: String
+        description: "Cause of death for logs (e.g., 'expedition_fatality', 'unrest')"
+        required: false
+        default: ""
+
+  roster_state:
+    description: "Top-level people roster in Sim"
+    fields:
+      _people:
+        type: "Array[Dictionary]"
+        description: "Ordered list of all people (living and dead)"
+      _next_person_id:
+        type: int
+        description: "Next ID to assign; never reused"
+      _people_by_id:
+        type: "Dictionary"
+        description: >
+          Lookup map: person_id -> index in _people array.
+          Rebuilt on load, not serialized. Enables O(1) lookup.
+
+  expedition_schema_additions:
+    description: "New fields on active_expedition dictionary"
+    fields:
+      member_ids:
+        type: "Array[int]"
+        description: "Ordered list of person IDs assigned to this expedition"
+        required: true
+      member_names:
+        type: "Array[String]"
+        description: "Cached full names for logging (parallel to member_ids)"
+        required: true
+      party_size:
+        type: int
+        description: "Number of crew (already exists; kept for compatibility)"
+        required: true
+      crew:
+        type: int
+        description: "Alias for party_size (backward compat)"
+        required: true
+
+  pending_outsiders_schema:
+    description: "Pre-generated identities for outsiders awaiting decision"
+    fields:
+      pending_outsider_identities:
+        type: "Dictionary"
+        description: >
+          Map: event_id (int) -> Array[Dictionary].
+          Each entry is a list of person schemas for that outsider event.
+          Names generated deterministically at event creation time.
+    example: |
+      pending_outsider_identities = {
+        42: [
+          {"temp_id": 1, "first": "Iris", "last": "Nguyen", "name": "Iris Nguyen"},
+          {"temp_id": 2, "first": "Jonah", "last": "Vale", "name": "Jonah Vale"},
+        ]
+      }
+
+# =============================================================================
+# NAME GENERATION
+# =============================================================================
+
+name_generation:
+  description: >
+    Deterministic name assignment using fixed name pools. Names are unique
+    within reasonable bounds (400 combinations from 20x20 pool). Beyond that,
+    suffix disambiguation is applied.
+
+  name_pools:
+    first_names:
+      count: 20
+      source: "PEOPLE_FIRST_NAMES constant (already exists in Sim.gd)"
+      values: >
+        Ada, Miles, Iris, Jonah, Mara, Felix, Noor, Reid, Talia, Ezra,
+        Vera, Rafi, Lina, Oren, Sana, Pax, Mina, Kian, Etta, Ronan
+
+    last_names:
+      count: 20
+      source: "PEOPLE_LAST_NAMES constant (already exists in Sim.gd)"
+      values: >
+        Kerr, Sato, Nguyen, Vale, Torres, Rowan, Quinn, Patel, Hale, Yun,
+        Ortega, Sol, Bennett, Ibrahim, Cole, Shaw, Wright, Singh, Park, Reyes
+
+  mapping_algorithm:
+    description: >
+      Names derived from person_id using modular arithmetic. This produces
+      deterministic, reproducible names given the same ID. The existing
+      _make_person() function already implements this.
+    formula: |
+      index = person_id - 1
+      first_idx = index % 20
+      last_idx = floor(index / 20) % 20
+      first = PEOPLE_FIRST_NAMES[first_idx]
+      last = PEOPLE_LAST_NAMES[last_idx]
+      name = "{first} {last}"
+    uniqueness_range: >
+      IDs 1-400 produce unique first+last combinations.
+      IDs 401+ will collide with earlier names.
+
+  collision_handling:
+    description: >
+      For populations exceeding 400 (unlikely), append generation number to
+      disambiguate. This is a future-proofing measure; current gameplay
+      rarely exceeds 50 population.
+    formula: |
+      generation = floor((person_id - 1) / 400)
+      if generation > 0:
+          name = "{first} {last} ({generation + 1})"
+    example:
+      - {id: 1, name: "Ada Kerr"}
+      - {id: 21, name: "Ada Sato"}
+      - {id: 401, name: "Ada Kerr (2)"}
+
+  rng_independence:
+    description: >
+      Name generation is PURELY ID-based. No RNG calls. This ensures names
+      are stable across replays. The existing implementation already
+      satisfies this requirement.
+
+# =============================================================================
+# SELECTION RULES
+# =============================================================================
+
+selection_rules:
+  description: >
+    How party members are chosen deterministically when launching an
+    expedition. Selection must be reproducible given the same roster state.
+
+  available_people_filter:
+    description: "People who can be selected for expeditions"
+    criteria:
+      - "status == 'home'"
+      - "status != 'dead'"
+      - "status != 'away'"
+      - "status != 'injured' (optional: allow injured at penalty)"
+
+  selection_algorithm:
+    description: >
+      Select party_size people from available pool in ID order. This ensures
+      deterministic selection without RNG. Lowest IDs (longest-tenured
+      survivors) are selected first.
+    pseudocode: |
+      func _select_expedition_members(party_size: int) -> Array[int]:
+          var available: Array[int] = []
+          for person in _people:  # already ordered by ID
+              if person.status == "home":
+                  available.append(person.id)
+          var selected: Array[int] = []
+          for i in range(min(party_size, available.size())):
+              selected.append(available[i])
+          return selected
+    rationale: >
+      ID-order selection is deterministic and requires no RNG. It also
+      creates implicit narrative: veterans go first. Alternative approaches
+      (random selection) would require additional RNG context tracking.
+
+  insufficient_crew_handling:
+    description: "What happens when requested party_size exceeds available people"
+    behavior:
+      - "Clamp party_size to available count"
+      - "Expedition still launches if at least 1 person available"
+      - "Log warning if party_size was reduced"
+      - "Abort expedition if zero people available"
+    validation: |
+      if available.size() == 0:
+          return {"ok": false, "message": "No crew available."}
+      var actual_size = min(requested_party_size, available.size())
+      if actual_size < requested_party_size:
+          _obs_push(obs, "EXPEDITION_CREW_REDUCED@%d->%d" % [requested_party_size, actual_size])
+
+  status_transitions:
+    description: "Status changes when people are assigned/return from expeditions"
+    on_expedition_launch:
+      - "Set status = 'away' for all member_ids"
+    on_expedition_return:
+      - "Set status = 'home' for surviving members"
+      - "Set status = 'dead', death_day, death_cause for fatalities"
+      - "Optionally set status = 'injured' for injury without fatality"
+    on_death:
+      - "Person remains in roster with status = 'dead'"
+      - "Do NOT remove from _people array (preserves log integrity)"
+      - "Decrement res.population"
+
+# =============================================================================
+# EVENT INTEGRATION
+# =============================================================================
+
+event_integration:
+  description: >
+    Events that must name specific people. Templates define how names appear
+    in event messages and logs.
+
+  expedition_events:
+    EXPEDITION_LAUNCHED:
+      description: "When expedition departs"
+      template: |
+        "Expedition #{id} departed for {destination}.
+        Crew: {member_names_formatted}."
+      payload_additions:
+        - "member_ids: Array[int]"
+        - "member_names: Array[String]"
+      example: >
+        Expedition #7 departed for Sealed Bunker.
+        Crew: Ada Kerr, Miles Sato.
+
+    EXPEDITION_INJURY:
+      description: "Non-fatal injury during expedition"
+      template: |
+        "{person_name} was injured during the expedition."
+      payload_additions:
+        - "injured_id: int"
+        - "injured_name: String"
+      example: >
+        Miles Sato was injured during the expedition.
+
+    EXPEDITION_FATALITY:
+      description: "Fatal injury during expedition"
+      template: |
+        "{person_name} did not survive the expedition."
+      payload_additions:
+        - "deceased_id: int"
+        - "deceased_name: String"
+        - "death_cause: 'expedition_fatality'"
+      example: >
+        Ada Kerr did not survive the expedition.
+
+    EXPEDITION_RESOLVED:
+      description: "Expedition returns"
+      template: |
+        "Expedition #{id} returned from {destination}.
+        Crew returned: {survivors_names}."
+      payload_additions:
+        - "survivors_ids: Array[int]"
+        - "survivors_names: Array[String]"
+        - "casualties_ids: Array[int]"
+        - "casualties_names: Array[String]"
+      example: >
+        Expedition #7 returned from Sealed Bunker.
+        Crew returned: Miles Sato.
+
+  outsider_events:
+    OUTSIDERS_ARRIVED:
+      description: "Outsiders appear at gate (before decision)"
+      template: |
+        "{count} outsiders at the gate: {names_list}."
+      payload_additions:
+        - "outsider_temp_ids: Array[int]"
+        - "outsider_names: Array[String]"
+      example: >
+        3 outsiders at the gate: Iris Nguyen, Jonah Vale, Mara Torres.
+
+    OUTSIDERS_ACCEPTED:
+      description: "Outsiders admitted to tower"
+      template: |
+        "Admitted: {names_list}. Population +{count}."
+      payload_additions:
+        - "admitted_ids: Array[int]"
+        - "admitted_names: Array[String]"
+      example: >
+        Admitted: Iris Nguyen, Jonah Vale, Mara Torres. Population +3.
+
+    OUTSIDERS_REJECTED:
+      description: "Outsiders turned away"
+      template: |
+        "Turned away: {names_list}. Rumors spread."
+      payload_additions:
+        - "rejected_names: Array[String]"
+      example: >
+        Turned away: Iris Nguyen, Jonah Vale, Mara Torres. Rumors spread.
+
+  unrest_events:
+    UNREST_CASUALTY:
+      description: "Population loss during civil unrest"
+      template: |
+        "{person_name} was lost to civil unrest."
+      payload_additions:
+        - "deceased_id: int"
+        - "deceased_name: String"
+        - "death_cause: 'civil_unrest'"
+      example: >
+        Rafi Ortega was lost to civil unrest.
+
+  message_formatting:
+    names_list_format: >
+      Join with ", " for up to 3 names. For 4+, use first 2 names + "and N others".
+    example_short: "Ada Kerr, Miles Sato"
+    example_long: "Ada Kerr, Miles Sato, and 4 others"
+    implementation: |
+      func _format_names_list(names: Array[String]) -> String:
+          if names.size() <= 3:
+              return ", ".join(names)
+          return "%s, %s, and %d others" % [names[0], names[1], names.size() - 2]
+
+# =============================================================================
+# UI CHANGES
+# =============================================================================
+
+ui_changes:
+  description: >
+    UI modifications to support party size selection and crew name display.
+
+  map_panel_modifications:
+    party_size_control:
+      location: "MapPanel launch panel (already exists)"
+      current_state: >
+        launch_crew_spin SpinBox exists; emits party_size to
+        expedition_requested signal and launch_expedition() call.
+      changes_required:
+        - "SpinBox already functional; verify min/max bounds"
+        - "Ensure max_value tracks available home people, not just population"
+        - "Add label showing selected crew names preview (optional enhancement)"
+
+    available_crew_display:
+      location: "MapPanel launch panel, below CrewSpin"
+      description: "Show who will be assigned based on current SpinBox value"
+      implementation_guidance: |
+        # Add Label node: SelectedCrewLabel
+        # Update on CrewSpin.value_changed signal
+        func _update_selected_crew_preview() -> void:
+            var count := int(launch_crew_spin.value)
+            if _sim == null or not _sim.has_method("preview_expedition_crew"):
+                selected_crew_label.text = ""
+                return
+            var names: Array = _sim.preview_expedition_crew(count)
+            selected_crew_label.text = "Crew: %s" % ", ".join(names)
+      optional: true
+      rationale: >
+        Nice-to-have for player clarity. Can be deferred to future iteration.
+
+    max_party_size_source:
+      current: "Uses res.population or get_max_party_size()"
+      change: "Use count of people with status='home'"
+      implementation: |
+        func get_available_crew_count() -> int:
+            var count := 0
+            for person in _people:
+                if person.get("status", "home") == "home":
+                    count += 1
+            return count
+
+  launch_confirmation:
+    description: "What the launch button sends to sim"
+    current: "expedition_requested.emit(destination_id, party_size, party_size)"
+    change: "No change needed; sim handles member assignment internally"
+    rationale: >
+      UI only specifies party_size. Sim deterministically selects which
+      people are assigned. This maintains clean separation of concerns.
+
+  ledger_panel_modifications:
+    expedition_log_format:
+      location: "LedgerPanel event display"
+      change: "Events now include member_names in payload; display them"
+      implementation_guidance: |
+        # In _format_event_message():
+        if event.type == "EXPEDITION_LAUNCHED":
+            var names: Array = event.payload.get("member_names", [])
+            return "Expedition to %s. Crew: %s" % [dest, ", ".join(names)]
+
+  outsiders_panel_modifications:
+    location: "MapPanel outsiders panel"
+    current: "Shows count and destination only"
+    change: "Show names of pending outsiders"
+    implementation: |
+      # In _update_pending_outsiders():
+      var names: Array = entry_dict.get("outsider_names", [])
+      var names_str := ", ".join(names) if names.size() <= 3 else "%s, %s, and %d others" % [names[0], names[1], names.size() - 2]
+      outsiders_label.text = "%d outsiders: %s" % [group_size, names_str]
+
+# =============================================================================
+# DETERMINISM SIGNATURE
+# =============================================================================
+
+determinism_signature:
+  description: >
+    State that must be included in determinism verification to ensure
+    people system is reproducible.
+
+  new_state_fields:
+    - "_people array (full contents)"
+    - "_next_person_id"
+    - "pending_outsider_identities"
+    - "active_expedition.member_ids"
+    - "For each person: id, status, joined_day, death_day"
+
+  hash_contribution:
+    description: "Fields to include in state hash for determinism tests"
+    implementation_guidance: |
+      func _people_hash_component() -> int:
+          var acc: int = 0
+          for person in _people:
+              acc = acc * 31 + int(person.get("id", 0))
+              acc = acc * 31 + _status_hash(str(person.get("status", "home")))
+              acc = acc * 31 + int(person.get("death_day", -1))
+          acc = acc * 31 + _next_person_id
+          return acc & 0x7FFFFFFF
+
+      func _status_hash(status: String) -> int:
+          match status:
+              "home": return 1
+              "away": return 2
+              "injured": return 3
+              "dead": return 4
+              _: return 0
+
+  invariants:
+    - "Same sim_seed + same commands = identical _people array"
+    - "Person IDs never reused"
+    - "_next_person_id >= _people.size() + 1"
+    - "Sum of status='home' + status='away' + status='injured' == res.population"
+    - "Sum of status='dead' == total_deaths"
+    - "No RNG calls in name generation"
+    - "member_ids selection is ID-ordered, not randomized"
+
+  rng_new_context_keys:
+    description: "New RNG context keys required for people system"
+    keys:
+      - context: "outsiders:{event_id}:identity_gen"
+        offset: "RNG_OFFSET_OUTSIDERS + event_id"
+        description: "Generating temp identities for outsider groups (NOT NEEDED if pure ID-based)"
+    note: >
+      Current design uses ID-based name generation, which requires no RNG.
+      If future features require random name selection, add context keys here.
+
+# =============================================================================
+# MIGRATION PLAN
+# =============================================================================
+
+migration_plan:
+  description: >
+    How to initialize roster for existing saves or fresh starts.
+
+  fresh_start:
+    description: "Initializing roster at game start"
+    steps:
+      - "In _setup_default_state(), after setting res.population"
+      - "Call _reset_people_state(res.population) (already done)"
+      - "People 1..N created with status='home', joined_day=0"
+    existing_code: >
+      _reset_people_state() and _add_people() already exist in Sim.gd.
+      Only need to add 'status' and 'joined_day' fields to _make_person().
+
+  save_file_migration:
+    description: "Loading saves that lack people data"
+    detection: "_people array missing or empty when population > 0"
+    recovery_steps:
+      - "Call _reset_people_state(res.population)"
+      - "Log migration event: 'MIGRATION:PEOPLE_INITIALIZED'"
+      - "All people get joined_day = current_day (retroactive)"
+    compatibility_flag:
+      name: "people_system_version"
+      values:
+        0: "No people system (legacy)"
+        1: "People system v1 (this spec)"
+
+  expedition_migration:
+    description: "In-progress expeditions without member_ids"
+    detection: "active_expedition exists but lacks 'member_ids' key"
+    recovery:
+      - "Synthesize member_ids from expedition.crew count"
+      - "Select first N available people (may not match original)"
+      - "Log: 'MIGRATION:EXPEDITION_MEMBERS_SYNTHESIZED'"
+    limitation: >
+      Cannot perfectly reconstruct which people were on the expedition.
+      This is acceptable; affects only saves with active expeditions at
+      migration time.
+
+  pending_outsiders_migration:
+    description: "Pending outsiders without identity data"
+    detection: "pending_outsiders entry lacks 'outsider_names' key"
+    recovery:
+      - "Generate identities using _next_person_id + group_size"
+      - "Store in pending_outsider_identities"
+      - "Log: 'MIGRATION:OUTSIDER_IDENTITIES_GENERATED'"
+
+# =============================================================================
+# TEST PLAN
+# =============================================================================
+
+test_plan:
+  determinism_tests:
+    - name: "roster_initialization_deterministic"
+      setup: "Start new game with population=6"
+      verify: |
+        - _people.size() == 6
+        - Person 1 is "Ada Kerr"
+        - Person 6 is "Noor Kerr"
+        - All have status="home", joined_day=0
+
+    - name: "expedition_member_selection_deterministic"
+      setup: |
+        Population 10, all home.
+        Launch expedition with party_size=3.
+      verify: |
+        - member_ids == [1, 2, 3]
+        - member_names == ["Ada Kerr", "Miles Kerr", "Iris Kerr"]
+        - Persons 1,2,3 now status="away"
+
+    - name: "replay_produces_identical_roster"
+      setup: |
+        sim_seed = 12345
+        Run 10 days with 2 expeditions, 1 outsider accept.
+      verify: |
+        Run twice; assert _people arrays identical.
+        Assert _next_person_id identical.
+
+    - name: "fatality_preserves_deceased_in_roster"
+      setup: |
+        Trigger expedition fatality (controlled via seed).
+        Check roster after return.
+      verify: |
+        - Deceased person has status="dead", death_day set
+        - Deceased still in _people array
+        - res.population decremented
+
+    - name: "outsider_identity_deterministic"
+      setup: |
+        Trigger outsider event at same point in two runs.
+      verify: |
+        - Same outsider_names in both runs
+        - After accept, same person IDs assigned
+
+  ui_verification:
+    - name: "party_size_spinbox_max_tracks_home_count"
+      setup: |
+        Population 10, 3 on expedition.
+      verify: |
+        - SpinBox max_value == 7 (home count)
+        - Cannot select more than 7
+
+    - name: "launch_log_shows_names"
+      action: "Launch expedition"
+      verify: |
+        - Event log shows "Crew: Ada Kerr, Miles Kerr"
+
+    - name: "outsiders_panel_shows_names"
+      action: "Trigger outsider arrival"
+      verify: |
+        - Panel shows "3 outsiders: Iris Nguyen, Jonah Vale, Mara Torres"
+
+  invariant_checks:
+    - "_people.size() >= res.population (dead people remain)"
+    - "No duplicate IDs in _people"
+    - "_next_person_id > all existing IDs"
+    - "Sum of home+away+injured == res.population"
+    - "active_expedition.member_ids.size() == active_expedition.party_size"
+    - "All member_ids exist in _people"
+    - "All member_ids have status='away' during expedition"
+
+  regression_scenarios:
+    - name: "people_expedition_smoke"
+      file: "tests/scenarios/people_expedition_smoke.json"
+      description: "Launch expedition, verify member_ids, verify return status"
+
+    - name: "people_outsiders_smoke"
+      file: "tests/scenarios/people_outsiders_smoke.json"
+      description: "Trigger outsiders, accept, verify new IDs assigned correctly"
+
+    - name: "people_fatality_roster"
+      file: "tests/scenarios/people_fatality_roster.json"
+      description: "Trigger fatality, verify deceased remains in roster"
+
+# =============================================================================
+# IMPLEMENTATION NOTES
+# =============================================================================
+
+implementation_notes:
+  file_changes_required:
+    scripts/sim/Sim.gd:
+      - "Extend _make_person() to include status, joined_day, death_day, death_cause"
+      - "Add _get_available_people() -> Array[Dictionary]"
+      - "Add _select_expedition_members(count: int) -> Array[int]"
+      - "Add preview_expedition_crew(count: int) -> Array[String]"
+      - "Add get_available_crew_count() -> int"
+      - "Modify launch_expedition() to call _select_expedition_members()"
+      - "Modify launch_expedition() to set member status='away'"
+      - "Modify expedition resolution to update member status"
+      - "Modify _emit_expedition_event() to include member names"
+      - "Modify _cmd_outsiders_decision() to use pre-generated identities"
+      - "Add pending_outsider_identities generation in outsider spawn"
+      - "Add _format_names_list() utility"
+      - "Add _people_hash_component() for determinism"
+
+    scripts/ui/MapPanel.gd:
+      - "Update max_party_size to use get_available_crew_count()"
+      - "Update outsiders_label to show names"
+      - "(Optional) Add selected crew preview label"
+
+    scripts/ui/LedgerPanel.gd:
+      - "Update event formatting to show member_names from payload"
+
+    tests/scenarios/:
+      - "Add people_expedition_smoke.json"
+      - "Add people_outsiders_smoke.json"
+      - "Add people_fatality_roster.json"
+
+  typing_requirements:
+    - "All new functions must have explicit return types"
+    - "All parameters must have explicit types"
+    - "Dictionary values accessed via .get() must be cast explicitly"
+    - "Array iteration variables must be typed"
+
+  backwards_compatibility:
+    - "Existing saves without _people: call migration"
+    - "Existing active_expedition without member_ids: synthesize"
+    - "Existing pending_outsiders without names: generate"
+    - "people_system_version flag in save data"
+
+  performance_considerations:
+    - "Roster expected size: 5-50 people; O(n) operations acceptable"
+    - "_people_by_id lookup map: rebuild on load, O(1) access"
+    - "No per-frame roster iteration required"
+
+  deferred_features:
+    description: "Explicitly out of scope for v1"
+    items:
+      - "Injury recovery mechanics (injured->home transition)"
+      - "Per-person skills or traits"
+      - "Player-selected expedition members (auto-select only)"
+      - "Memorial/obituary UI"
+      - "Person portraits or visual representation"
+      - "Relationships between people"

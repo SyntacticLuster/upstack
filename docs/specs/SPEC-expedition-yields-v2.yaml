@@ -1,0 +1,566 @@
+# UPSTACK Expeditions v2: Consequential Yields with Deterministic Seeded RNG
+# Implementation Specification (Codex Prompt)
+# Version: 2.0.0
+# Date: 2026-01-30
+# Thread Type: SPEC
+# Mode: Feature Mode
+
+overview:
+  summary: >
+    Replaces the current simplistic expedition yields (crew * 3 per resource)
+    with a consequential, risk-scaled haul system. A single "haul points" roll
+    determines total expedition value, then weights allocate points into
+    discrete resources. Risk affects both expected value and variance, with
+    high-risk outcomes sometimes reducing realized haul while increasing
+    story/penalty hooks.
+
+  design_goals:
+    - Expeditions feel meaningful and strategic, not trivial +6 resource ticks
+    - Rewards scale with duration and risk using diminishing returns
+    - High risk increases expected value AND variance
+    - All outcomes are deterministic and reproducible given seed + inputs
+    - Exposed tuning knobs for balance iteration
+
+  constraints:
+    - Must use project deterministic RNG conventions (see rng_contract)
+    - No system clock calls; all randomness derived from sim_seed + context
+    - Must integrate with existing expedition state machine
+    - Must respect finite-world pool depletion model
+
+formulas:
+  # === HAUL POINTS CALCULATION ===
+
+  haul_points:
+    description: >
+      Total expedition value expressed as abstract "haul points" before
+      resource allocation. Calculated from a base roll modified by duration
+      and risk factors.
+
+    base_roll:
+      distribution: triangular
+      description: >
+        Triangular distribution between [low, mode, high] based on risk tier.
+        Triangular preferred over uniform for more naturalistic clustering
+        around mode with occasional extremes.
+      formula: triangular_sample(low, mode, high, rng)
+      implementation: |
+        # Triangular distribution sampling
+        func _triangular_sample(low: float, mode: float, high: float, u: float) -> float:
+            var fc: float = (mode - low) / (high - low)
+            if u < fc:
+                return low + sqrt(u * (high - low) * (mode - low))
+            else:
+                return high - sqrt((1.0 - u) * (high - low) * (high - mode))
+
+    risk_bands:
+      description: >
+        Base haul point ranges per risk level. Higher risk = higher expected
+        value and wider variance.
+      tiers:
+        0:  # Safe (tower vicinity, never used for real expeditions)
+          low: 20
+          mode: 25
+          high: 30
+          label: "safe"
+        1:  # Low risk
+          low: 30
+          mode: 40
+          high: 50
+          label: "low"
+        2:  # Medium risk
+          low: 55
+          mode: 72
+          high: 90
+          label: "medium"
+        3:  # High risk
+          low: 85
+          mode: 110
+          high: 140
+          label: "high"
+
+    duration_factor:
+      description: >
+        Multiplier based on expedition total trip duration. Uses diminishing
+        returns (sqrt) to prevent long trips from being overpowered.
+      formula: |
+        duration_hours = (distance_hours * 2) + onsite_hours
+        normalized_duration = duration_hours / DURATION_BASELINE_HOURS
+        duration_factor = clamp(
+            DURATION_FACTOR_MIN + (sqrt(normalized_duration) - 1.0) * DURATION_FACTOR_SCALE,
+            DURATION_FACTOR_MIN,
+            DURATION_FACTOR_MAX
+        )
+      constants:
+        DURATION_BASELINE_HOURS: 12  # Reference trip length for factor = 1.0
+        DURATION_FACTOR_MIN: 0.8     # Minimum multiplier for very short trips
+        DURATION_FACTOR_MAX: 1.5     # Maximum multiplier (diminishing returns cap)
+        DURATION_FACTOR_SCALE: 0.35  # How much sqrt contributes
+
+    risk_variance_amplifier:
+      description: >
+        High risk widens the distribution by scaling distance from mode.
+        This is applied AFTER the base roll, not to the band parameters.
+      formula: |
+        variance_roll = randf() * 2.0 - 1.0  # -1.0 to +1.0
+        amplified_delta = variance_roll * RISK_VARIANCE_SCALE[risk_level]
+        final_roll = base_roll * (1.0 + amplified_delta)
+      constants:
+        RISK_VARIANCE_SCALE:
+          0: 0.0   # Safe: no variance amplification
+          1: 0.05  # Low: ±5% variance
+          2: 0.12  # Medium: ±12% variance
+          3: 0.22  # High: ±22% variance
+
+    crew_modifier:
+      description: >
+        More crew = slightly better gathering efficiency, with diminishing returns.
+      formula: |
+        crew_factor = 1.0 + (sqrt(crew) - 1.0) * CREW_EFFICIENCY_SCALE
+        crew_factor = clamp(crew_factor, 1.0, CREW_FACTOR_MAX)
+      constants:
+        CREW_EFFICIENCY_SCALE: 0.15  # Per sqrt(crew) contribution
+        CREW_FACTOR_MAX: 1.4         # Cap even for large crews
+
+    final_haul_formula: |
+      raw_haul = triangular_sample(band.low, band.mode, band.high, rng1)
+      variance_amplified = raw_haul * (1.0 + variance_roll * variance_scale)
+      duration_scaled = variance_amplified * duration_factor
+      crew_scaled = duration_scaled * crew_factor
+      final_haul_points = int(round(crew_scaled))
+
+  # === RESOURCE ALLOCATION ===
+
+  allocation:
+    description: >
+      Convert haul points into concrete resources using destination-specific
+      weights. Weights must sum to 1.0. Small per-resource jitter adds variety
+      without inflating totals.
+
+    formula: |
+      for each resource in destination.weight_profile:
+          base_share = haul_points * weight[resource]
+          jitter = (randf() * 2.0 - 1.0) * ALLOCATION_JITTER_RANGE
+          jittered_share = base_share * (1.0 + jitter)
+          # Ensure non-negative integer
+          final_amount[resource] = max(0, int(round(jittered_share)))
+
+      # Normalize to not exceed haul_points total (jitter can cause drift)
+      total_allocated = sum(final_amount.values())
+      if total_allocated > haul_points:
+          # Proportionally reduce largest shares
+          excess = total_allocated - haul_points
+          _reduce_excess(final_amount, excess)
+
+    constants:
+      ALLOCATION_JITTER_RANGE: 0.08  # ±8% per resource
+
+    pool_depletion:
+      description: >
+        Final yields are capped by remaining destination pool per resource.
+        Expedition cannot yield more than what exists at destination.
+      formula: |
+        for each resource:
+            actual_yield[resource] = min(final_amount[resource], pool[resource])
+            pool[resource] -= actual_yield[resource]
+
+constants:
+  # === HAUL POINT BANDS (duplicated for quick reference) ===
+  HAUL_BAND_SAFE:    { low: 20, mode: 25, high: 30 }
+  HAUL_BAND_LOW:     { low: 30, mode: 40, high: 50 }
+  HAUL_BAND_MEDIUM:  { low: 55, mode: 72, high: 90 }
+  HAUL_BAND_HIGH:    { low: 85, mode: 110, high: 140 }
+
+  # === DURATION SCALING ===
+  DURATION_BASELINE_HOURS: 12
+  DURATION_FACTOR_MIN: 0.8
+  DURATION_FACTOR_MAX: 1.5
+  DURATION_FACTOR_SCALE: 0.35
+
+  # === RISK VARIANCE ===
+  RISK_VARIANCE_SCALE: [0.0, 0.05, 0.12, 0.22]
+
+  # === CREW SCALING ===
+  CREW_EFFICIENCY_SCALE: 0.15
+  CREW_FACTOR_MAX: 1.4
+
+  # === ALLOCATION ===
+  ALLOCATION_JITTER_RANGE: 0.08
+
+  # === COST/PENALTY CONSTANTS ===
+  RISK_ATTENTION_BASE: [0.0, 1.0, 3.0, 6.0]
+  RISK_ATTENTION_PER_HAUL: [0.0, 0.02, 0.04, 0.08]
+  RISK_ATTENTION_CAP: [0.0, 4.0, 10.0, 20.0]
+
+  PARTIAL_LOSS_THRESHOLDS: [1.0, 0.92, 0.82, 0.70]  # Below this roll = partial loss
+  PARTIAL_LOSS_RETAIN_MIN: [1.0, 0.85, 0.70, 0.40]  # Minimum % retained on partial loss
+  PARTIAL_LOSS_RETAIN_MAX: [1.0, 0.95, 0.85, 0.70]  # Maximum % retained on partial loss
+
+  INJURY_CHANCE_BASE: [0.0, 0.02, 0.06, 0.12]
+  INJURY_FATALITY_GIVEN_INJURY: 0.15  # 15% of injuries are fatal
+
+  FATIGUE_BASE: [0, 1, 2, 4]  # Morale penalty per risk tier
+
+  # === TUNING SAFE RANGES (for knob documentation) ===
+  tuning_guidance:
+    haul_bands:
+      description: "Adjust mode ±20% for balance; keep low/high ratio ~1.5-2.0"
+      safe_low_mode_ratio: [0.7, 0.85]
+      safe_high_mode_ratio: [1.15, 1.35]
+    duration_factor:
+      description: "Max should stay ≤1.8 to prevent duration abuse"
+      safe_max_range: [1.3, 1.8]
+    risk_variance:
+      description: "High risk variance >0.30 creates too many outliers"
+      safe_high_risk_max: 0.30
+    crew_factor:
+      description: "Cap >1.6 makes large crews mandatory"
+      safe_max_range: [1.3, 1.6]
+
+destination_weights:
+  description: >
+    Weight profiles per destination. Each profile defines the relative
+    probability of haul points converting to each resource type.
+    Weights MUST sum to 1.0.
+
+  profiles:
+    scrapyard:
+      name: "Abandoned Scrapyard"
+      flavor: "Industrial salvage; metal and parts dominate"
+      weights:
+        materials: 0.65
+        food: 0.15
+        water: 0.10
+        silver: 0.10
+      risk_level: 1
+
+    reservoir:
+      name: "Old Reservoir"
+      flavor: "Water-rich but some salvageable equipment"
+      weights:
+        water: 0.70
+        materials: 0.20
+        food: 0.05
+        silver: 0.05
+      risk_level: 1
+
+    greenhouse:
+      name: "Collapsed Greenhouse"
+      flavor: "Overgrown food sources, some water catchment"
+      weights:
+        food: 0.60
+        water: 0.25
+        materials: 0.10
+        silver: 0.05
+      risk_level: 2
+
+    bunker:
+      name: "Sealed Bunker"
+      flavor: "High-value cache; balanced supplies with rare finds"
+      weights:
+        materials: 0.35
+        food: 0.25
+        water: 0.20
+        silver: 0.20
+      risk_level: 3
+
+    outpost:
+      name: "Remote Outpost"
+      flavor: "Former trading post; mix of goods"
+      weights:
+        materials: 0.40
+        food: 0.30
+        water: 0.15
+        silver: 0.15
+      risk_level: 2
+
+  validation_invariants:
+    - "sum(weights.values()) == 1.0 for all profiles"
+    - "all weight values in [0.0, 1.0]"
+    - "at least one weight > 0 per profile"
+
+rng_contract:
+  description: >
+    All expedition RNG must be deterministic and reproducible. This section
+    defines the seeding protocol and context key format.
+
+  seed_context_key_format: >
+    "expedition:{expedition_id}:{phase}:d{day}h{start_hour}"
+
+    Where:
+      - expedition_id: unique integer ID from expedition_id_counter
+      - phase: one of "haul_roll", "allocation", "risk_outcome", "injury_roll"
+      - day: simulation day when expedition started
+      - start_hour: hour_index when expedition was dispatched
+
+  example_keys:
+    - "expedition:7:haul_roll:d5h14"
+    - "expedition:7:allocation:d5h14"
+    - "expedition:7:risk_outcome:d5h14"
+    - "expedition:7:injury_roll:d5h14"
+
+  rng_tracker_usage:
+    description: >
+      Use existing _create_rng_tracker() pattern from Sim.gd.
+      Each phase gets its own tracker to ensure independent reproducibility.
+
+    implementation_pattern: |
+      # For haul roll
+      var haul_tracker := _create_rng_tracker(
+          day,
+          PHASE_EXPEDITIONS,
+          "expedition:%d:haul_roll:d%dh%d" % [exp_id, start_day, start_hour],
+          RNG_OFFSET_ACTIVE_EXPEDITION
+      )
+      var haul_rng := _rng_instance_for_entry(haul_tracker)
+
+      # For allocation (separate tracker)
+      var alloc_tracker := _create_rng_tracker(
+          day,
+          PHASE_EXPEDITIONS,
+          "expedition:%d:allocation:d%dh%d" % [exp_id, start_day, start_hour],
+          RNG_OFFSET_ACTIVE_EXPEDITION + 100
+      )
+
+      # For risk outcome
+      var risk_tracker := _create_rng_tracker(
+          day,
+          PHASE_EXPEDITIONS,
+          "expedition:%d:risk_outcome:d%dh%d" % [exp_id, start_day, start_hour],
+          RNG_OFFSET_ACTIVE_EXPEDITION + 200
+      )
+
+  invariants:
+    - "Same sim_seed + expedition inputs = identical yields"
+    - "No calls to OS.get_unix_time() or Time.get_ticks_*()"
+    - "RNG trackers logged to _rng_usage_history for audit"
+    - "Each RNG phase uses distinct offset to prevent correlation"
+
+costs:
+  description: >
+    High-risk expeditions carry follow-on costs. These are calculated
+    at expedition resolution and may affect resources, morale, attention,
+    and population.
+
+  attention_cost:
+    description: >
+      Attention debt accrues based on risk and haul size. Larger hauls from
+      risky areas draw more notice.
+    formula: |
+      base_attention = RISK_ATTENTION_BASE[risk_level]
+      haul_attention = haul_points * RISK_ATTENTION_PER_HAUL[risk_level]
+      total_attention = min(base_attention + haul_attention, RISK_ATTENTION_CAP[risk_level])
+    application: "Added to res.threat or expedition_attention accumulator"
+
+  fatigue_cost:
+    description: "Crew exhaustion reduces morale post-expedition"
+    formula: |
+      fatigue_penalty = FATIGUE_BASE[risk_level]
+      # Optionally scale with duration
+      if duration_hours > DURATION_BASELINE_HOURS * 1.5:
+          fatigue_penalty += 1
+    application: "Subtracted from res.morale at expedition resolution"
+
+  partial_loss:
+    description: >
+      Risk of losing portion of haul due to mishaps. Higher risk = more likely
+      and more severe if it occurs.
+    formula: |
+      loss_roll = randf()
+      if loss_roll < PARTIAL_LOSS_THRESHOLDS[risk_level]:
+          # Partial loss occurs
+          retain_pct = lerp(
+              PARTIAL_LOSS_RETAIN_MIN[risk_level],
+              PARTIAL_LOSS_RETAIN_MAX[risk_level],
+              randf()
+          )
+          for each resource:
+              actual_yield[resource] = int(actual_yield[resource] * retain_pct)
+          # Log event for narrative hooks
+          emit_event("EXPEDITION_LOSS", ...)
+    story_hooks:
+      - "Ambush en route"
+      - "Equipment failure"
+      - "Spoilage/contamination"
+      - "Had to abandon cache to escape"
+
+  injury:
+    description: "Chance of crew injury or death, scaling with risk"
+    formula: |
+      injury_roll = randf()
+      if injury_roll < INJURY_CHANCE_BASE[risk_level]:
+          # Injury occurs
+          fatal_roll = randf()
+          if fatal_roll < INJURY_FATALITY_GIVEN_INJURY:
+              crew_lost += 1
+              emit_event("EXPEDITION_FATALITY", ...)
+          else:
+              # Non-fatal injury: morale penalty, possibly reduced future capacity
+              extra_fatigue += 2
+              emit_event("EXPEDITION_INJURY", ...)
+
+  cost_summary_table:
+    header: [risk_level, attention_range, fatigue, partial_loss_chance, injury_chance]
+    rows:
+      - [0, "0", 0, "0%", "0%"]
+      - [1, "1.0-4.0", 1, "8%", "2%"]
+      - [2, "3.0-10.0", 2, "18%", "6%"]
+      - [3, "6.0-20.0", 4, "30%", "12%"]
+
+logging:
+  description: >
+    What to record in the ledger for player transparency without exposing
+    internal mechanics. Focus on outcomes, not formulas.
+
+  ledger_fields:
+    expedition_dispatch:
+      - expedition_id
+      - destination_name
+      - crew_count
+      - risk_label (e.g., "low", "medium", "high")
+      - estimated_return_hour
+
+    expedition_resolved:
+      - expedition_id
+      - destination_name
+      - yields (dictionary of resource: amount)
+      - total_haul_summary (e.g., "72 units gathered")
+      - costs_incurred:
+          - attention_gained
+          - fatigue_applied
+          - losses (if any)
+          - injuries (if any)
+      - outcome_tone ("successful", "troubled", "costly")
+
+  example_ledger_lines:
+    - |
+      [Hour 47] EXPEDITION_RESOLVED
+      Expedition #7 returned from Sealed Bunker.
+      Haul: materials +38, food +21, water +16, silver +8
+      Outcome: Troubled (partial loss en route, 25% abandoned)
+      Costs: +8 attention, -4 morale (fatigue)
+
+    - |
+      [Hour 23] EXPEDITION_RESOLVED
+      Expedition #4 returned from Old Reservoir.
+      Haul: water +52, materials +14
+      Outcome: Successful
+      Costs: +2 attention, -1 morale (fatigue)
+
+    - |
+      [Hour 89] EXPEDITION_RESOLVED
+      Expedition #12 returned from Collapsed Greenhouse.
+      Haul: food +44, water +18, materials +7
+      Outcome: Costly (1 crew injured)
+      Costs: +5 attention, -4 morale (fatigue + injury)
+
+  hidden_details:
+    description: "Do NOT expose to player"
+    list:
+      - Exact RNG seed values
+      - Raw haul points before allocation
+      - Internal roll thresholds
+      - Variance amplification factor
+
+test_plan:
+  determinism_tests:
+    - name: "Same seed produces identical yields"
+      setup: |
+        sim_seed = 12345
+        expedition to "bunker" with crew=2
+      verify: |
+        Run twice; assert yields dictionary identical
+        Assert RNG tracker call counts match
+
+    - name: "Different expedition_id produces different yields"
+      setup: |
+        sim_seed = 12345
+        expedition #1 to "bunker"
+        expedition #2 to "bunker"
+      verify: |
+        Assert yields differ (context key includes expedition_id)
+
+    - name: "Replay from save produces identical results"
+      setup: |
+        Run 10 days with 3 expeditions
+        Save state
+        Reload and replay from day 5
+      verify: |
+        Assert expedition outcomes match original run
+
+  balance_sanity_checks:
+    expected_haul_by_risk:
+      description: "Average haul points per risk tier (baseline duration, 1 crew)"
+      table:
+        header: [risk_level, expected_low, expected_mean, expected_high]
+        rows:
+          - [1, 30, 40, 50]
+          - [2, 55, 72, 90]
+          - [3, 85, 110, 140]
+
+    expected_haul_by_duration:
+      description: "Duration factor effect on mean haul (risk 2, 1 crew)"
+      table:
+        header: [trip_hours, duration_factor, scaled_mean]
+        rows:
+          - [8, 0.85, 61]
+          - [12, 1.00, 72]
+          - [18, 1.15, 83]
+          - [24, 1.25, 90]
+          - [36, 1.40, 101]
+
+    expected_costs_by_risk:
+      description: "Average cost profile per risk tier"
+      table:
+        header: [risk_level, mean_attention, mean_fatigue, loss_events_per_10, injuries_per_10]
+        rows:
+          - [1, 2.0, 1, 0.8, 0.2]
+          - [2, 5.5, 2, 1.8, 0.6]
+          - [3, 12.0, 4, 3.0, 1.2]
+
+  invariant_checks:
+    - "haul_points >= 0"
+    - "all resource yields >= 0"
+    - "sum(allocation) <= haul_points + jitter_tolerance"
+    - "yields never exceed destination pool"
+    - "destination weights sum to 1.0 ± 0.001"
+    - "no RNG calls outside tracked context"
+    - "deterministic signature: hash(sim_seed, exp_id, start_hour) → yields is stable"
+
+  regression_scenarios:
+    - name: "expedition_yield_v2_smoke"
+      file: "tests/scenarios/expedition_yield_v2_smoke.json"
+      description: "Basic expedition to each destination, verify yields in expected range"
+
+    - name: "expedition_yield_v2_risk_variance"
+      file: "tests/scenarios/expedition_yield_v2_risk_variance.json"
+      description: "100 expeditions to high-risk destination, verify variance distribution"
+
+    - name: "expedition_yield_v2_pool_depletion"
+      file: "tests/scenarios/expedition_yield_v2_pool_depletion.json"
+      description: "Repeated expeditions until pool exhausted, verify proper capping"
+
+implementation_notes:
+  migration:
+    description: "Steps to replace current yield system"
+    steps:
+      - "Add new constants to Sim.gd (HAUL_BAND_*, DURATION_*, etc.)"
+      - "Implement _triangular_sample() utility function"
+      - "Implement _calculate_expedition_haul() -> int"
+      - "Implement _allocate_haul_to_resources(haul: int, weights: Dictionary) -> Dictionary"
+      - "Implement _apply_expedition_costs(risk: int, haul: int) -> Dictionary"
+      - "Refactor _expedition_apply_onsite_outcome() to use new system"
+      - "Update _expedition_resolve() to apply costs"
+      - "Update ledger emission format"
+      - "Add destination weight profiles to MapDef.gd"
+      - "Run determinism_test.gd to verify reproducibility"
+
+  backwards_compatibility:
+    - "Existing save files with in-progress expeditions: resolve using old system"
+    - "Add version flag to active_expedition dict to detect"
+    - "New expeditions dispatched after update use v2 system"
+
+  file_changes_required:
+    - "scripts/sim/Sim.gd: constants, yield calculation, cost application"
+    - "scripts/sim/MapDef.gd: add weight_profile to LocationDef"
+    - "scripts/tests/determinism_test.gd: add expedition yield v2 cases"
+    - "tests/scenarios/: add new regression scenarios"
