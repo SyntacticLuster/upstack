@@ -247,7 +247,7 @@ func _time_info(entry: Variant) -> Dictionary:
 		info["day"] = int(day_value)
 	if hour_value != null:
 		info["hour"] = int(hour_value)
-	_scroll_ledger_to_bottom_if_following(auto_scroll)
+	return info
 func _format_message(entry: Variant) -> String:
 	if not (entry is Dictionary):
 		return str(entry)
