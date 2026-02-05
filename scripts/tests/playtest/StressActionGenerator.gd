@@ -165,11 +165,11 @@ func _gen_cmd_expedition(sim: Sim) -> Dictionary:
 
 
 func _gen_cmd_trade(_sim: Sim) -> Dictionary:
-	var resources: Array[String] = Sim.TRADEABLE_RESOURCES
+	var resources: Array = Sim.TRADEABLE_RESOURCES
 	if resources.is_empty():
 		return _skip_action("no tradeable resources")
 	var direction := "buy" if _rng.randf() < 0.5 else "sell"
-	var resource := resources[_rng.randi_range(0, resources.size() - 1)]
+	var resource := str(resources[_rng.randi_range(0, resources.size() - 1)])
 	var min_amt: int = int(_trade_bounds.get("min", 1))
 	var max_amt: int = int(_trade_bounds.get("max", 50))
 	var amount: int = _rng.randi_range(max(min_amt, 1), max(max_amt, min_amt))
@@ -198,12 +198,34 @@ func _gen_cmd_module_priority(sim: Sim) -> Dictionary:
 	var coords := _random_module_coord(sim)
 	if coords.is_empty():
 		return _skip_action("no module coords")
+	var floor_idx: int = int(coords.get("f", -1))
+	var used: Dictionary = {}
+	if floor_idx >= 0 and floor_idx < sim.tower.floors.size():
+		var grid: Array[Variant] = sim.tower.floors[floor_idx]
+		for y in range(grid.size()):
+			var row: Array[Variant] = grid[y]
+			for x in range(row.size()):
+				if row[x] == null:
+					continue
+				var priority_value: Variant = sim.tower.get_module_priority_override(floor_idx, x, y)
+				if priority_value == null:
+					continue
+				used[int(priority_value)] = true
+	var priority_candidate: int = _rng.randi_range(0, 100)
+	var attempts: int = 0
+	while attempts < 20 and used.has(priority_candidate):
+		priority_candidate = _rng.randi_range(0, 100)
+		attempts += 1
+	if used.has(priority_candidate):
+		priority_candidate = _first_unused_priority(used, 0, 100)
+		if priority_candidate < 0:
+			return _skip_action("no free priority")
 	return {
 		"type": "cmd_set_module_priority",
 		"f": int(coords.get("f", -1)),
 		"x": int(coords.get("x", -1)),
 		"y": int(coords.get("y", -1)),
-		"priority": _rng.randi_range(0, 100),
+		"priority": priority_candidate,
 	}
 
 
@@ -362,3 +384,12 @@ func _normalize_coverage(value: Variant) -> Array[String]:
 			if lever_id != "" and not result.has(lever_id):
 				result.append(lever_id)
 	return result
+
+
+func _first_unused_priority(used: Dictionary, min_value: int, max_value: int) -> int:
+	var start: int = min(min_value, max_value)
+	var end: int = max(min_value, max_value)
+	for value in range(start, end + 1):
+		if not used.has(value):
+			return value
+	return -1

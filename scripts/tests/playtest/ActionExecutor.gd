@@ -107,19 +107,17 @@ func _exec_trade(action: Dictionary) -> Dictionary:
 		pre_resource = _sim.res.get_amount(resource)
 	var pre_attention: float = _sim.res.attention_multiplier
 
-	var result := _sim.queue_trade(resource, direction, amount)
-
 	var payload := {
 		"direction": direction,
 		"resource": resource,
 		"amount": amount,
-		"result": result.get("message", ""),
 	}
 
-	if result.get("ok", false):
-		# Process the trade command immediately.
-		_sim._advance_hour()
+	var obs: Array[String] = []
+	_sim._cmd_trade(payload, _sim.res, obs, _sim.day)
+	var rejected: bool = _trade_rejected(obs)
 
+	if not rejected:
 		# Check trade-specific invariants.
 		_invariants.check_trade(
 			_sim,
@@ -133,20 +131,20 @@ func _exec_trade(action: Dictionary) -> Dictionary:
 		)
 		_logger.log_action("trade", _sim.hour_index, _sim.day, payload, "ok")
 		return {"ok": true}
-	else:
-		# Rejection case should not advance time or mutate state.
-		_invariants.check_trade_rejection(
-			_sim,
-			_logger,
-			pre_hour_index,
-			pre_day,
-			pre_hour_of_day,
-			pre_snapshot,
-			pre_attention
-		)
-		_logger.log_action("trade", _sim.hour_index, _sim.day, payload, "rejected")
-		# Trade rejection may be intentional (testing invalid trades).
-		return {"ok": true, "trade_rejected": true}
+
+	# Rejection case should not advance time or mutate state.
+	_invariants.check_trade_rejection(
+		_sim,
+		_logger,
+		pre_hour_index,
+		pre_day,
+		pre_hour_of_day,
+		pre_snapshot,
+		pre_attention
+	)
+	_logger.log_action("trade", _sim.hour_index, _sim.day, payload, "rejected")
+	# Trade rejection may be intentional (testing invalid trades).
+	return {"ok": true, "trade_rejected": true}
 
 
 func _exec_expedition(action: Dictionary) -> Dictionary:
@@ -484,6 +482,14 @@ func _command_stalled(cmd_type: String) -> bool:
 	if _sim._last_obs_tokens is Array:
 		obs = _sim._last_obs_tokens as Array[String]
 	return obs.has("CMD_STALL@%s" % cmd_type)
+
+
+func _trade_rejected(obs: Array[String]) -> bool:
+	for token in obs:
+		var text := str(token)
+		if text.begins_with("TRADE_REJECTED") or text.begins_with("TRADE_NO_"):
+			return true
+	return false
 
 
 func _evaluate_condition(condition: String) -> bool:

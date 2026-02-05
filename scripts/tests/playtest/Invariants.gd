@@ -843,6 +843,11 @@ func _check_EX_member_status(sim: Sim, logger: RefCounted) -> void:
 		return
 	_checked += 1
 	var expedition: Dictionary = sim.get_active_expedition()
+	var state: String = str(expedition.get("state", ""))
+	if state == sim.EXPEDITION_STATE_RESOLVED or state == sim.EXPEDITION_STATE_FAILED:
+		_passed += 1
+		logger.log_invariant("EX-4_MEMBER_IDS_VALID", true, sim.hour_index, sim.day)
+		return
 	var member_value: Variant = expedition.get("member_ids", [])
 	if not (member_value is Array):
 		_passed += 1

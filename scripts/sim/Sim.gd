@@ -4634,7 +4634,7 @@ func _log_labor_overdrive_effects(base_totals: Dictionary, reduction_reasons: Ar
 			continue
 		var boosted := int(ceil(float(base_amount) * multiplier))
 		var label: String = resource.capitalize()
-		var message := "OVERDRIVE L%d: %s base %d -> %d (+25%/level)" % [intensity, label, base_amount, boosted]
+		var message := "OVERDRIVE L%d: %s base %d -> %d (+25%%/level)" % [intensity, label, base_amount, boosted]
 		if reason_suffix != "":
 			message += reason_suffix
 		_emit_event(

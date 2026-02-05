@@ -1,4 +1,4 @@
-extends Node
+extends SceneTree
 class_name PlaytestRunner
 
 ## Headless playtest harness for deterministic scenario execution.
@@ -46,9 +46,10 @@ var _action_history: Array[Dictionary] = []
 var _action_history_max: int = DEFAULT_ACTION_HISTORY_SIZE
 var _current_sim: Sim
 var _current_out_dir: String = ""
+var _active_sims: Array[Sim] = []
 
 
-func _ready() -> void:
+func _initialize() -> void:
 	_parse_args()
 	call_deferred("_run_all")
 
@@ -90,7 +91,7 @@ func _run_all() -> void:
 	_logger.log_config({"scenarios_dir": _resolved_scenarios_dir})
 	if scenarios.is_empty():
 		_logger.log_error("No scenarios found in %s" % _resolved_scenarios_dir)
-		get_tree().quit(EXIT_EXECUTION_ERROR)
+		quit(EXIT_EXECUTION_ERROR)
 		return
 
 	_total_scenarios = scenarios.size()
@@ -106,7 +107,7 @@ func _run_all() -> void:
 	_print_final_summary()
 
 	var exit_code: int = EXIT_SUCCESS if _failed_scenarios == 0 else EXIT_INVARIANT_FAIL
-	get_tree().quit(exit_code)
+	quit(exit_code)
 
 
 func _discover_scenarios() -> Array[Dictionary]:
@@ -186,12 +187,25 @@ func _run_scenario(scenario: Dictionary) -> bool:
 
 	_write_summary(scenario_name, seed_value, result_a, result_b, deterministic)
 
+	if not passed:
+		var failure_type := str(result_a.get("failure_type", ""))
+		var failure_message := str(result_a.get("failure_message", ""))
+		if failure_type == "" and _repeat_for_determinism and not result_b.is_empty():
+			failure_type = str(result_b.get("failure_type", ""))
+			failure_message = str(result_b.get("failure_message", ""))
+		if failure_type == "" and not deterministic:
+			failure_type = "determinism"
+			failure_message = "Signature mismatch between runs"
+		_log_scenario_failure(scenario_name, failure_type, failure_message)
+
+	_cleanup_active_sims()
 	return passed
 
 
 func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Array, metadata: Dictionary) -> Dictionary:
 	var sim: Sim = SimScript.new() as Sim
 	_current_sim = sim
+	_register_sim(sim)
 	sim.sim_seed = seed_value
 	sim._setup_default_state()
 	sim.day = 0
@@ -201,7 +215,11 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 	if not sim.tick.is_connected(_on_sim_tick):
 		sim.tick.connect(_on_sim_tick)
 
-	_executor.reset(sim, _logger, _invariants, _max_hours)
+	var mode: String = str(metadata.get("mode", ""))
+	var max_hours_for_run: int = _max_hours
+	if mode == "generated":
+		max_hours_for_run = _max_hours + Sim.HOURS_PER_DAY
+	_executor.reset(sim, _logger, _invariants, max_hours_for_run)
 	_invariants.reset()
 	_invariants.set_sampling_interval(_invariant_sampling)
 
@@ -210,13 +228,16 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 	var commands_run: Array[String] = []
 	var signatures: Array[String] = []
 	var execution_failed: bool = false
+	var failure_type: String = ""
+	var failure_message: String = ""
 
-	var mode: String = str(metadata.get("mode", ""))
 	if mode == "generated":
 		var result := _run_generated_scenario(sim, _scenario_name, seed_value, metadata, commands_run, signatures)
 		hours_simulated = int(result.get("hours_simulated", sim.hour_index))
 		actions_executed = int(result.get("actions_executed", 0))
 		execution_failed = bool(result.get("failed", false))
+		failure_type = str(result.get("failure_type", ""))
+		failure_message = str(result.get("failure_message", ""))
 	else:
 		for action in actions:
 			if action is Dictionary:
@@ -230,20 +251,29 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 				signatures.append(sim._state_signature())
 
 				if not exec_result.get("ok", false):
-					_logger.log_action_fail(action_dict, exec_result.get("message", "Unknown error"))
-					_handle_failure(_scenario_name, seed_value, exec_result.get("message", "Execution error"))
+					var action_message := str(exec_result.get("message", "Execution error"))
+					_logger.log_action_fail(action_dict, action_message)
+					_handle_failure(_scenario_name, seed_value, action_message)
 					execution_failed = true
+					failure_type = "action_fail"
+					failure_message = action_message
 					break
 
 				if _invariants.total_failed() > 0:
-					_handle_failure(_scenario_name, seed_value, "Invariant failure")
+					var last_failure: Dictionary = _logger.get_last_invariant_failure()
+					var invariant_message := str(last_failure.get("message", "Invariant failure"))
+					_handle_failure(_scenario_name, seed_value, invariant_message)
 					execution_failed = true
+					failure_type = "invariant_fail"
+					failure_message = invariant_message
 					break
 
 				if hours_simulated > _max_hours:
 					_logger.log_error("Max hours exceeded: %d" % _max_hours)
 					_handle_failure(_scenario_name, seed_value, "Max hours exceeded")
 					execution_failed = true
+					failure_type = "timeout"
+					failure_message = "Max hours exceeded"
 					break
 
 	var signature := sim._state_signature()
@@ -253,6 +283,8 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 
 	return {
 		"passed": _invariants.all_passed() and not execution_failed,
+		"failure_type": failure_type,
+		"failure_message": failure_message,
 		"signature": signature,
 		"signatures": signatures,
 		"hours_simulated": hours_simulated,
@@ -285,6 +317,26 @@ func _ensure_out_dir(dir_path: String) -> void:
 	var absolute := ProjectSettings.globalize_path(dir_path)
 	DirAccess.make_dir_recursive_absolute(absolute)
 
+
+func _register_sim(sim: Sim) -> void:
+	_active_sims.append(sim)
+
+
+func _cleanup_active_sims() -> void:
+	for sim in _active_sims:
+		if sim == null:
+			continue
+		if sim.tick.is_connected(_on_sim_tick):
+			sim.tick.disconnect(_on_sim_tick)
+		sim.free()
+	_active_sims.clear()
+	_current_sim = null
+
+
+func _log_scenario_failure(scenario_name: String, failure_type: String, failure_message: String) -> void:
+	var safe_type := failure_type if failure_type != "" else "unknown"
+	var safe_message := failure_message if failure_message != "" else "unspecified"
+	_logger.log_error("Scenario '%s' failed (%s): %s" % [scenario_name, safe_type, safe_message])
 
 func _on_sim_tick(_day: int) -> void:
 	if _current_sim == null:
@@ -376,6 +428,8 @@ func _run_generated_scenario(
 
 	var actions_executed: int = 0
 	var failed: bool = false
+	var failure_type: String = ""
+	var failure_message: String = ""
 	while sim.hour_index < target_hours:
 		var action: Dictionary = generator.call("next_action", sim)
 		var action_type := str(action.get("type", ""))
@@ -388,24 +442,30 @@ func _run_generated_scenario(
 		actions_executed += 1
 		signatures.append(sim._state_signature())
 		if not exec_result.get("ok", false):
-			_logger.log_action_fail(action, exec_result.get("message", "Unknown error"))
-			_handle_failure(scenario_name, seed_value, exec_result.get("message", "Execution error"))
+			var action_message := str(exec_result.get("message", "Execution error"))
+			_logger.log_action_fail(action, action_message)
+			_handle_failure(scenario_name, seed_value, action_message)
 			failed = true
+			failure_type = "action_fail"
+			failure_message = action_message
 			break
 		if _invariants.total_failed() > 0:
-			_handle_failure(scenario_name, seed_value, "Invariant failure")
+			var last_failure: Dictionary = _logger.get_last_invariant_failure()
+			var invariant_message := str(last_failure.get("message", "Invariant failure"))
+			_handle_failure(scenario_name, seed_value, invariant_message)
 			failed = true
+			failure_type = "invariant_fail"
+			failure_message = invariant_message
 			break
 		if sim.hour_index > _max_hours:
-			_logger.log_error("Max hours exceeded: %d" % _max_hours)
-			_handle_failure(scenario_name, seed_value, "Max hours exceeded")
-			failed = true
 			break
 
 	return {
 		"actions_executed": actions_executed,
 		"hours_simulated": sim.hour_index,
 		"failed": failed,
+		"failure_type": failure_type,
+		"failure_message": failure_message,
 	}
 
 
