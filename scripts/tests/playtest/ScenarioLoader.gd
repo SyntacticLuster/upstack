@@ -11,6 +11,12 @@ const VALID_ACTION_TYPES: Array[String] = [
 	"expedition",
 	"lever",
 	"set_rations",
+	"cmd_set_rations",
+	"cmd_trade",
+	"cmd_expedition",
+	"cmd_set_module_enabled",
+	"cmd_set_module_priority",
+	"cmd_outsiders_decision",
 	"wait_expedition_resolve",
 	"assert",
 	"snapshot",
@@ -41,6 +47,9 @@ func load_scenario(path: String) -> Dictionary:
 		return result
 
 	var scenario: Dictionary = data as Dictionary
+	var metadata_value: Variant = scenario.get("metadata", {})
+	var metadata: Dictionary = metadata_value as Dictionary if metadata_value is Dictionary else {}
+	var mode: String = str(metadata.get("mode", ""))
 
 	# Validate required keys.
 	for key in REQUIRED_KEYS:
@@ -48,17 +57,33 @@ func load_scenario(path: String) -> Dictionary:
 			result["error"] = "Missing required key: %s" % key
 			return result
 
-	# Validate actions array.
+	# Validate actions array or generated marker.
 	var actions: Variant = scenario.get("actions")
-	if not actions is Array:
-		result["error"] = "actions must be an Array"
-		return result
+	if mode == "generated":
+		if actions is String:
+			var marker := str(actions)
+			if marker != "GENERATED":
+				result["error"] = "actions must be 'GENERATED' for generated scenarios"
+				return result
+		elif actions is Array:
+			var actions_array: Array = actions as Array
+			var validation_error := _validate_actions(actions_array)
+			if validation_error != "":
+				result["error"] = validation_error
+				return result
+		else:
+			result["error"] = "actions must be an Array or 'GENERATED' for generated scenarios"
+			return result
+	else:
+		if not actions is Array:
+			result["error"] = "actions must be an Array"
+			return result
 
-	var actions_array: Array = actions as Array
-	var validation_error := _validate_actions(actions_array)
-	if validation_error != "":
-		result["error"] = validation_error
-		return result
+		var actions_array: Array = actions as Array
+		var validation_error := _validate_actions(actions_array)
+		if validation_error != "":
+			result["error"] = validation_error
+			return result
 
 	return scenario
 
@@ -126,6 +151,47 @@ func _validate_action_fields(index: int, action_type: String, action: Dictionary
 		"set_rations":
 			if not action.has("food_ration") and not action.has("water_ration"):
 				return "Action %d (set_rations) must have 'food_ration' or 'water_ration'" % index
+
+		"cmd_set_rations":
+			if not action.has("food_ration") and not action.has("water_ration"):
+				return "Action %d (cmd_set_rations) must have 'food_ration' or 'water_ration'" % index
+
+		"cmd_trade":
+			if not action.has("direction"):
+				return "Action %d (cmd_trade) missing 'direction'" % index
+			if not action.has("resource"):
+				return "Action %d (cmd_trade) missing 'resource'" % index
+			if not action.has("amount"):
+				return "Action %d (cmd_trade) missing 'amount'" % index
+			var cmd_direction := str(action.get("direction", "")).to_lower()
+			if cmd_direction != "buy" and cmd_direction != "sell":
+				return "Action %d (cmd_trade) 'direction' must be 'buy' or 'sell'" % index
+
+		"cmd_expedition":
+			if not action.has("destination_id"):
+				return "Action %d (cmd_expedition) missing 'destination_id'" % index
+			if not action.has("crew"):
+				return "Action %d (cmd_expedition) missing 'crew'" % index
+			if not _is_positive_int(action.get("crew")):
+				return "Action %d (cmd_expedition) 'crew' must be positive int" % index
+
+		"cmd_set_module_enabled":
+			if not action.has("f") or not action.has("x") or not action.has("y"):
+				return "Action %d (cmd_set_module_enabled) missing coords" % index
+			if not action.has("enabled"):
+				return "Action %d (cmd_set_module_enabled) missing 'enabled'" % index
+
+		"cmd_set_module_priority":
+			if not action.has("f") or not action.has("x") or not action.has("y"):
+				return "Action %d (cmd_set_module_priority) missing coords" % index
+			if not action.has("priority"):
+				return "Action %d (cmd_set_module_priority) missing 'priority'" % index
+
+		"cmd_outsiders_decision":
+			if not action.has("event_id"):
+				return "Action %d (cmd_outsiders_decision) missing 'event_id'" % index
+			if not action.has("accept"):
+				return "Action %d (cmd_outsiders_decision) missing 'accept'" % index
 
 		"wait_expedition_resolve":
 			if not action.has("timeout_hours"):

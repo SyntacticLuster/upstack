@@ -34,6 +34,18 @@ func execute(action: Dictionary) -> Dictionary:
 			return _exec_lever(action)
 		"set_rations":
 			return _exec_set_rations(action)
+		"cmd_set_rations":
+			return _exec_cmd_set_rations(action)
+		"cmd_trade":
+			return _exec_cmd_trade(action)
+		"cmd_expedition":
+			return _exec_cmd_expedition(action)
+		"cmd_set_module_enabled":
+			return _exec_cmd_set_module_enabled(action)
+		"cmd_set_module_priority":
+			return _exec_cmd_set_module_priority(action)
+		"cmd_outsiders_decision":
+			return _exec_cmd_outsiders_decision(action)
 		"wait_expedition_resolve":
 			return _exec_wait_expedition_resolve(action)
 		"assert":
@@ -210,6 +222,179 @@ func _exec_set_rations(action: Dictionary) -> Dictionary:
 	return {"ok": true}
 
 
+func _exec_cmd_set_rations(action: Dictionary) -> Dictionary:
+	var payload: Dictionary = {}
+	if action.has("food_ration"):
+		payload["food"] = clamp(float(action.get("food_ration", 1.0)), 0.0, 1.0)
+	if action.has("water_ration"):
+		payload["water"] = clamp(float(action.get("water_ration", 1.0)), 0.0, 1.0)
+	if payload.is_empty():
+		return {"ok": false, "message": "cmd_set_rations missing payload"}
+
+	var pre_food: float = _sim.food_ration
+	var pre_water: float = _sim.water_ration
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_SET_RATIONS, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var stalled := _command_stalled(Sim.CMD_SET_RATIONS)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_SET_RATIONS,
+		stalled,
+		{"food_ration": pre_food, "water_ration": pre_water},
+		{"food_ration": _sim.food_ration, "water_ration": _sim.water_ration}
+	)
+	_logger.log_action("cmd_set_rations", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
+func _exec_cmd_trade(action: Dictionary) -> Dictionary:
+	var direction := str(action.get("direction", "")).to_lower()
+	var resource := str(action.get("resource", "")).to_lower()
+	var amount := int(action.get("amount", 0))
+	var payload := {
+		"direction": direction,
+		"resource": resource,
+		"amount": amount,
+	}
+
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_TRADE, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var stalled := _command_stalled(Sim.CMD_TRADE)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_TRADE,
+		stalled,
+		{},
+		{}
+	)
+	_logger.log_action("cmd_trade", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
+func _exec_cmd_expedition(action: Dictionary) -> Dictionary:
+	var destination_id := str(action.get("destination_id", ""))
+	var crew := int(action.get("crew", 1))
+	var payload := {
+		"destination_id": destination_id,
+		"crew": crew,
+	}
+	var pre_has_active: bool = _sim.has_active_expedition()
+	var pre_active_id: int = 0
+	if pre_has_active:
+		var pre_active: Dictionary = _sim.get_active_expedition()
+		pre_active_id = int(pre_active.get("id", 0))
+
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_EXPEDITION, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var post_has_active: bool = _sim.has_active_expedition()
+	var post_active_id: int = 0
+	if post_has_active:
+		var post_active: Dictionary = _sim.get_active_expedition()
+		post_active_id = int(post_active.get("id", 0))
+
+	var stalled := _command_stalled(Sim.CMD_EXPEDITION)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_EXPEDITION,
+		stalled,
+		{"has_active": pre_has_active, "active_id": pre_active_id},
+		{"has_active": post_has_active, "active_id": post_active_id}
+	)
+	_logger.log_action("cmd_expedition", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
+func _exec_cmd_set_module_enabled(action: Dictionary) -> Dictionary:
+	var payload := {
+		"f": int(action.get("f", -1)),
+		"x": int(action.get("x", -1)),
+		"y": int(action.get("y", -1)),
+		"enabled": bool(action.get("enabled", true)),
+	}
+	var pre_enabled: bool = _sim.tower.is_module_enabled(int(payload["f"]), int(payload["x"]), int(payload["y"]))
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_SET_MODULE_ENABLED, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var post_enabled: bool = _sim.tower.is_module_enabled(int(payload["f"]), int(payload["x"]), int(payload["y"]))
+	var stalled := _command_stalled(Sim.CMD_SET_MODULE_ENABLED)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_SET_MODULE_ENABLED,
+		stalled,
+		{"enabled": pre_enabled},
+		{"enabled": post_enabled}
+	)
+	_logger.log_action("cmd_set_module_enabled", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
+func _exec_cmd_set_module_priority(action: Dictionary) -> Dictionary:
+	var payload := {
+		"f": int(action.get("f", -1)),
+		"x": int(action.get("x", -1)),
+		"y": int(action.get("y", -1)),
+		"priority": int(action.get("priority", 0)),
+	}
+	var pre_priority: Variant = _sim.tower.get_module_priority_override(int(payload["f"]), int(payload["x"]), int(payload["y"]))
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_SET_MODULE_PRIORITY, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var post_priority: Variant = _sim.tower.get_module_priority_override(int(payload["f"]), int(payload["x"]), int(payload["y"]))
+	var stalled := _command_stalled(Sim.CMD_SET_MODULE_PRIORITY)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_SET_MODULE_PRIORITY,
+		stalled,
+		{"priority": pre_priority},
+		{"priority": post_priority}
+	)
+	_logger.log_action("cmd_set_module_priority", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
+func _exec_cmd_outsiders_decision(action: Dictionary) -> Dictionary:
+	var payload := {
+		"event_id": int(action.get("event_id", -1)),
+		"accept": bool(action.get("accept", false)),
+	}
+	var pre_population: int = _sim.res.population
+	_sim.enqueue_command(Sim.SimCommand.new(Sim.CMD_OUTSIDERS_DECISION, payload))
+	var advance_result := _advance_to_next_production()
+	if not advance_result.get("ok", false):
+		return advance_result
+
+	var post_population: int = _sim.res.population
+	var stalled := _command_stalled(Sim.CMD_OUTSIDERS_DECISION)
+	_invariants.check_command_queue(
+		_sim,
+		_logger,
+		Sim.CMD_OUTSIDERS_DECISION,
+		stalled,
+		{"population": pre_population},
+		{"population": post_population}
+	)
+	_logger.log_action("cmd_outsiders_decision", _sim.hour_index, _sim.day, payload, "ok")
+	return {"ok": true}
+
+
 func _exec_wait_expedition_resolve(action: Dictionary) -> Dictionary:
 	var timeout_hours := int(action.get("timeout_hours", 100))
 	var hours_waited: int = 0
@@ -279,6 +464,26 @@ func _exec_snapshot(action: Dictionary) -> Dictionary:
 
 	_logger.log_snapshot(label, _sim.hour_index, _sim.day, state)
 	return {"ok": true}
+
+
+func _advance_to_next_production() -> Dictionary:
+	var guard: int = max(_max_hours - _sim.hour_index, 0) + 1
+	while guard > 0:
+		_sim._advance_hour()
+		_invariants.check_continuous(_sim, _logger)
+		if _sim.hour_index > _max_hours:
+			return {"ok": false, "message": "Max hours exceeded"}
+		if _sim.production_executed_today and _sim.hour_of_day == _sim.scheduled_production_hour:
+			return {"ok": true}
+		guard -= 1
+	return {"ok": false, "message": "Max hours exceeded while awaiting production"}
+
+
+func _command_stalled(cmd_type: String) -> bool:
+	var obs: Array[String] = []
+	if _sim._last_obs_tokens is Array:
+		obs = _sim._last_obs_tokens as Array[String]
+	return obs.has("CMD_STALL@%s" % cmd_type)
 
 
 func _evaluate_condition(condition: String) -> bool:

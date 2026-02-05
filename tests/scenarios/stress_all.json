@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "name": "stress_all",
+    "seed": 777777,
+    "description": "Deterministic chaos loop covering all simulation systems",
+    "mode": "generated",
+    "generator": "StressActionGenerator",
+    "target_hours": 2000
+  },
+  "generator_config": {
+    "action_weights": {
+      "advance_hours": 40,
+      "cmd_rations": 8,
+      "cmd_expedition": 12,
+      "cmd_trade": 12,
+      "cmd_module_enable": 6,
+      "cmd_module_priority": 4,
+      "cmd_outsiders": 4,
+      "lever_apply": 8,
+      "wait_expedition": 4,
+      "snapshot": 2
+    },
+    "force_coverage": [
+      "ration_hardening",
+      "labor_overdrive",
+      "expedition_compression",
+      "information_throttling",
+      "module_abandonment",
+      "emergency_conversion"
+    ],
+    "expedition_destinations": ["scrapyard", "reservoir", "greenhouse", "bunker", "outpost"],
+    "trade_bounds": {"min": 1, "max": 50},
+    "lever_durations": {"min_hours": 12, "max_hours": 96}
+  },
+  "actions": "GENERATED"
+}

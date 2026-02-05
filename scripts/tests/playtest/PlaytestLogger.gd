@@ -5,6 +5,9 @@ class_name PlaytestLogger
 ## All output goes to stdout for CI capture.
 
 var verbose: bool = false
+var deterministic_mode: bool = true
+var _sequence: int = 0
+var _last_invariant_failure: Dictionary = {}
 
 
 func log_info(message: String) -> void:
@@ -23,6 +26,16 @@ func log_scenario_start(name: String, seed_value: int) -> void:
 		"name": name,
 		"seed": seed_value,
 	}
+	_emit_json(entry)
+
+
+func log_config(config: Dictionary) -> void:
+	var entry := {
+		"ts": _timestamp(),
+		"type": "config",
+	}
+	for key in config.keys():
+		entry[str(key)] = config.get(key)
 	_emit_json(entry)
 
 
@@ -134,6 +147,7 @@ func log_invariant_fail(
 		"expected": expected,
 		"actual": actual,
 	}
+	_last_invariant_failure = entry.duplicate(true)
 	_emit_json(entry)
 
 
@@ -142,6 +156,9 @@ func _emit_json(entry: Dictionary) -> void:
 
 
 func _timestamp() -> String:
+	if deterministic_mode:
+		_sequence += 1
+		return "T%d" % _sequence
 	var datetime := Time.get_datetime_dict_from_system(true)
 	return "%04d-%02d-%02dT%02d:%02d:%02dZ" % [
 		datetime.get("year", 1970),
@@ -151,6 +168,12 @@ func _timestamp() -> String:
 		datetime.get("minute", 0),
 		datetime.get("second", 0),
 	]
+
+
+func get_last_invariant_failure() -> Dictionary:
+	if _last_invariant_failure.is_empty():
+		return {}
+	return _last_invariant_failure.duplicate(true)
 
 
 func _hash_signature(signature: String) -> String:

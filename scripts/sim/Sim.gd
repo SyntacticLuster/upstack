@@ -412,6 +412,7 @@ var location_heat: Dictionary = {}
 var pending_outsiders: Dictionary = {}
 var rejected_outsiders_days_left: int = 0
 var expedition_id_counter: int = 0
+var pending_arrival_id_counter: int = 0
 
 # Lagged consequences for expeditions (persistent, deterministic queue)
 var expedition_counter: int = 0
@@ -840,6 +841,13 @@ func _reserve_outsider_identities(group_size: int, joined_day: int) -> Array[Dic
 		identities.append(record)
 	return identities
 
+func _next_pending_arrival_id() -> int:
+	var candidate: int = pending_arrival_id_counter + 1
+	while pending_outsiders.has(candidate):
+		candidate += 1
+	pending_arrival_id_counter = candidate
+	return candidate
+
 func _ids_from_identities(identities: Array[Dictionary]) -> Array[int]:
 	var ids: Array[int] = []
 	for identity in identities:
@@ -912,16 +920,43 @@ func _roll_expedition_survivors(expedition_id: int) -> int:
 		return 5
 	return 6
 
-func _apply_expedition_survivors(survivors_gained: int) -> void:
+func _apply_expedition_survivors(
+	survivors_gained: int,
+	expedition_id: int,
+	destination_id: String,
+	destination_name: String
+) -> Dictionary:
+	var entry: Dictionary = {}
 	if res == null:
-		return
+		return entry
 	if survivors_gained <= 0:
-		return
-	var population_before := res.population
-	res.population += survivors_gained
-	_add_people(survivors_gained, day, PEOPLE_STATUS_HOME)
+		return entry
+	_ensure_people_initialized()
+	var event_id := _next_pending_arrival_id()
+	var identities := _reserve_outsider_identities(survivors_gained, day)
+	pending_outsider_identities[event_id] = identities
+	var survivor_ids := _ids_from_identities(identities)
+	var survivor_names := _names_from_identities(identities)
+	entry = {
+		"id": event_id,
+		"expedition_id": expedition_id,
+		"destination_id": destination_id,
+		"destination_name": destination_name,
+		"kind": "expedition_survivors",
+		"group_size": identities.size(),
+		"count": identities.size(),
+		"created_day": day,
+		"created_hour": hour_of_day,
+		"survivor_ids": survivor_ids,
+		"survivor_names": survivor_names,
+		"names": survivor_names.duplicate(),
+		"command_admit": "SURVIVORS_ADMIT %d" % event_id,
+		"command_reject": "SURVIVORS_REJECT %d" % event_id,
+	}
+	pending_outsiders[event_id] = entry
 	active_expedition["survivors_gained"] = survivors_gained
-	_apply_overcrowding_penalty(population_before)
+	active_expedition["pending_survivor_event_id"] = event_id
+	return entry
 
 func _apply_overcrowding_penalty(population_before: int) -> void:
 	if res == null:
@@ -1132,6 +1167,7 @@ func _reset_policies_and_pools() -> void:
 	pending_outsiders.clear()
 	rejected_outsiders_days_left = 0
 	expedition_id_counter = 0
+	pending_arrival_id_counter = 0
 	_delayed_consequence_queue.clear()
 	_delayed_insertion_counter = 0
 	_consequence_queue.clear()
@@ -2927,6 +2963,7 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 	var entry_value: Variant = pending_outsiders.get(event_id, {})
 	var entry: Dictionary = entry_value as Dictionary if entry_value is Dictionary else {}
 	var accept: bool = bool(payload.get("accept", false))
+	var kind: String = str(entry.get("kind", "gate_outsiders"))
 	var group_size: int = maxi(int(entry.get("group_size", 0)), 0)
 	var base_payload := entry.duplicate(true)
 	base_payload["decision"] = "accept" if accept else "reject"
@@ -2945,8 +2982,49 @@ func _cmd_outsiders_decision(payload: Dictionary, sim_res: Resources, obs: Array
 	var outsider_names := _names_from_identities(identities)
 	base_payload["outsider_ids"] = outsider_ids
 	base_payload["outsider_names"] = outsider_names
+	base_payload["kind"] = kind
+	if kind == "expedition_survivors":
+		base_payload["survivor_ids"] = outsider_ids
+		base_payload["survivor_names"] = outsider_names
 
-	if accept:
+	if kind == "expedition_survivors":
+		if accept:
+			var population_before := sim_res.population
+			var added_ids: Array[int] = []
+			if group_size > 0:
+				sim_res.population += group_size
+				added_ids = _add_reserved_people(identities, sim_day)
+			_apply_overcrowding_penalty(population_before)
+			base_payload["admitted_ids"] = added_ids
+			base_payload["admitted_names"] = _names_for_ids(added_ids)
+			_emit_event(
+				"EXPEDITION_SURVIVORS_ADMITTED",
+				"Expedition survivors admitted: %s. Population +%d." % [
+					_format_names_list(outsider_names),
+					group_size,
+				],
+				"info",
+				"player_feed",
+				base_payload,
+				"expedition",
+				sim_day,
+				hour_of_day,
+				true
+			)
+		else:
+			base_payload["rejected_names"] = outsider_names
+			_emit_event(
+				"EXPEDITION_SURVIVORS_REJECTED",
+				"Expedition survivors turned away: %s." % _format_names_list(outsider_names),
+				"warn",
+				"player_feed",
+				base_payload,
+				"expedition",
+				sim_day,
+				hour_of_day,
+				true
+			)
+	elif accept:
 		var population_before := sim_res.population
 		var added_ids: Array[int] = []
 		if group_size > 0:
@@ -3628,6 +3706,36 @@ func _expedition_resolve() -> void:
 	var yield_summary: String = _format_expedition_yield_summary(yields)
 
 	if yield_version >= EXPEDITION_YIELD_VERSION_V2:
+		if survivors_gained > 0 and not yields.is_empty():
+			var party_size: int = _expedition_party_size(active_expedition)
+			var effective_carriers: int = party_size + survivors_gained
+			if party_size > 0 and effective_carriers > party_size:
+				var scale: float = float(effective_carriers) / float(party_size)
+				var pool_variant: Variant = active_expedition.get("resources", {})
+				var pool_remaining: Dictionary = {}
+				if pool_variant is Dictionary:
+					pool_remaining = (pool_variant as Dictionary)
+				var keys := yields.keys()
+				keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+					return str(a) < str(b)
+				)
+				for key in keys:
+					var current_amount: int = int(yields.get(key, 0))
+					if current_amount <= 0:
+						continue
+					var target_amount: int = int(round(float(current_amount) * scale))
+					if target_amount <= current_amount:
+						continue
+					var available: int = int(pool_remaining.get(key, 0))
+					if available <= 0:
+						continue
+					var extra: int = min(target_amount - current_amount, available)
+					if extra <= 0:
+						continue
+					yields[key] = current_amount + extra
+					pool_remaining[key] = max(available - extra, 0)
+				active_expedition["resources"] = pool_remaining
+			yield_summary = _format_expedition_yield_summary(yields)
 		for key in yields.keys():
 			var amount: int = int(yields.get(key, 0))
 			_expedition_apply_resource_gain(str(key), amount)
@@ -3667,7 +3775,12 @@ func _expedition_resolve() -> void:
 		if not injured_ids.is_empty():
 			_set_people_status(injured_ids, PEOPLE_STATUS_INJURED)
 
-		_apply_expedition_survivors(survivors_gained)
+		var pending_survivors_entry := _apply_expedition_survivors(
+			survivors_gained,
+			expedition_id,
+			_dest_id,
+			dest_name
+		)
 
 		var loss_applied: bool = bool(active_expedition.get("loss_applied", false))
 		var retain_pct: float = float(active_expedition.get("retain_pct", 1.0))
@@ -3707,7 +3820,19 @@ func _expedition_resolve() -> void:
 		if cost_parts.size() > 0:
 			message += "\nCosts: %s" % ", ".join(cost_parts)
 		if survivors_gained > 0:
-			message += "\nSurvivors: +%d" % survivors_gained
+			var survivor_names: Array[String] = []
+			if not pending_survivors_entry.is_empty():
+				var names_value: Variant = pending_survivors_entry.get("survivor_names", [])
+				if names_value is Array:
+					for name_value in names_value:
+						survivor_names.append(str(name_value))
+			if survivor_names.is_empty():
+				message += "\nSurvivors awaiting admission: +%d" % survivors_gained
+			else:
+				message += "\nSurvivors awaiting admission: %s" % _format_names_list(survivor_names)
+			var pending_id: int = int(pending_survivors_entry.get("id", -1))
+			if pending_id >= 0:
+				message += ". Use SURVIVORS_ADMIT %d or SURVIVORS_REJECT %d." % [pending_id, pending_id]
 
 		var payload := active_expedition.duplicate(true)
 		payload["yields"] = yields.duplicate(true)
@@ -3729,6 +3854,10 @@ func _expedition_resolve() -> void:
 		payload["casualty_names"] = _names_for_ids(casualty_ids)
 		payload["injured_ids"] = injured_ids.duplicate()
 		payload["injured_names"] = _names_for_ids(injured_ids)
+		if not pending_survivors_entry.is_empty():
+			payload["pending_survivor_event_id"] = int(pending_survivors_entry.get("id", -1))
+			payload["pending_survivor_ids"] = pending_survivors_entry.get("survivor_ids", [])
+			payload["pending_survivor_names"] = pending_survivors_entry.get("survivor_names", [])
 
 		_emit_expedition_event(
 			"EXPEDITION_RESOLVED",
@@ -3773,7 +3902,12 @@ func _expedition_resolve() -> void:
 		if not survivors_ids_legacy.is_empty():
 			_set_people_status(survivors_ids_legacy, PEOPLE_STATUS_HOME)
 
-		_apply_expedition_survivors(survivors_gained)
+		var pending_survivors_entry := _apply_expedition_survivors(
+			survivors_gained,
+			expedition_id,
+			_dest_id,
+			dest_name
+		)
 
 		active_expedition["state"] = EXPEDITION_STATE_RESOLVED
 
@@ -3784,7 +3918,19 @@ func _expedition_resolve() -> void:
 		if crew_lost > 0:
 			legacy_message += " Lost %d crew." % crew_lost
 		if survivors_gained > 0:
-			legacy_message += " Survivors: +%d." % survivors_gained
+			var survivor_names: Array[String] = []
+			if not pending_survivors_entry.is_empty():
+				var names_value: Variant = pending_survivors_entry.get("survivor_names", [])
+				if names_value is Array:
+					for name_value in names_value:
+						survivor_names.append(str(name_value))
+			if survivor_names.is_empty():
+				legacy_message += " Survivors awaiting admission: +%d." % survivors_gained
+			else:
+				legacy_message += " Survivors awaiting admission: %s." % _format_names_list(survivor_names)
+			var pending_id: int = int(pending_survivors_entry.get("id", -1))
+			if pending_id >= 0:
+				legacy_message += " Use SURVIVORS_ADMIT %d or SURVIVORS_REJECT %d." % [pending_id, pending_id]
 
 		var legacy_payload := active_expedition.duplicate(true)
 		legacy_payload["member_ids"] = member_ids.duplicate()
@@ -3793,6 +3939,10 @@ func _expedition_resolve() -> void:
 		legacy_payload["survivor_names"] = _names_for_ids(survivors_ids_legacy)
 		legacy_payload["casualty_ids"] = casualty_ids_legacy.duplicate()
 		legacy_payload["casualty_names"] = _names_for_ids(casualty_ids_legacy)
+		if not pending_survivors_entry.is_empty():
+			legacy_payload["pending_survivor_event_id"] = int(pending_survivors_entry.get("id", -1))
+			legacy_payload["pending_survivor_ids"] = pending_survivors_entry.get("survivor_ids", [])
+			legacy_payload["pending_survivor_names"] = pending_survivors_entry.get("survivor_names", [])
 		_emit_expedition_event(
 			"EXPEDITION_RESOLVED",
 			legacy_message,
@@ -3852,14 +4002,23 @@ func _maybe_queue_outsiders_event() -> void:
 	var outsider_ids := _ids_from_identities(identities)
 	var outsider_names := _names_from_identities(identities)
 	pending_outsider_identities[expedition_id] = identities
+	entry["kind"] = "gate_outsiders"
+	entry["count"] = group_size
+	entry["names"] = outsider_names.duplicate()
+	entry["source"] = destination_id
 	entry["outsider_ids"] = outsider_ids
 	entry["outsider_names"] = outsider_names
+	entry["command_admit"] = "GATE_ADMIT %d" % expedition_id
+	entry["command_reject"] = "GATE_REJECT %d" % expedition_id
 	pending_outsiders[expedition_id] = entry
 	var dest_name: String = str(active_expedition.get("destination_name", "unknown"))
-	var message := "Outsiders at the gate: %d from %s. %s" % [
+	var message := "Outsiders at the gate: %d from %s. %s (id %d). Use GATE_ADMIT %d or GATE_REJECT %d." % [
 		group_size,
 		dest_name,
-		_format_names_list(outsider_names)
+		_format_names_list(outsider_names),
+		expedition_id,
+		expedition_id,
+		expedition_id
 	]
 	_emit_event(
 		"OUTSIDERS_AT_GATE",
@@ -3912,7 +4071,11 @@ func get_pending_outsiders() -> Array[Dictionary]:
 	for key in keys:
 		var entry_value: Variant = pending_outsiders.get(key, {})
 		if entry_value is Dictionary:
-			results.append((entry_value as Dictionary).duplicate(true))
+			var entry: Dictionary = entry_value as Dictionary
+			var kind: String = str(entry.get("kind", "gate_outsiders"))
+			if kind != "gate_outsiders":
+				continue
+			results.append(entry.duplicate(true))
 	return results
 
 func queue_outsiders_decision(event_id: int, accept: bool) -> Dictionary:
@@ -3930,6 +4093,38 @@ func queue_outsiders_decision(event_id: int, accept: bool) -> Dictionary:
 	enqueue_command(SimCommand.new(CMD_OUTSIDERS_DECISION, payload))
 	result["ok"] = true
 	result["message"] = "OUTSIDERS DECISION QUEUED"
+	return result
+
+func execute_console_command(command_line: String) -> Dictionary:
+	var result := {"ok": false, "message": "INVALID COMMAND"}
+	if command_line == "":
+		result["message"] = "EMPTY COMMAND"
+		return result
+	var tokens := command_line.strip_edges().split(" ", false)
+	if tokens.is_empty():
+		result["message"] = "EMPTY COMMAND"
+		return result
+	var verb := str(tokens[0]).to_upper()
+	if verb == "GATE_ADMIT" or verb == "GATE_REJECT":
+		if tokens.size() < 2:
+			result["message"] = "MISSING ID"
+			return result
+		var id_token := str(tokens[1])
+		if not id_token.is_valid_int():
+			result["message"] = "INVALID ID"
+			return result
+		var event_id := id_token.to_int()
+		return queue_outsiders_decision(event_id, verb == "GATE_ADMIT")
+	if verb == "SURVIVORS_ADMIT" or verb == "SURVIVORS_REJECT":
+		if tokens.size() < 2:
+			result["message"] = "MISSING ID"
+			return result
+		var id_token := str(tokens[1])
+		if not id_token.is_valid_int():
+			result["message"] = "INVALID ID"
+			return result
+		var event_id := id_token.to_int()
+		return queue_outsiders_decision(event_id, verb == "SURVIVORS_ADMIT")
 	return result
 
 func get_max_party_size() -> int:

@@ -256,3 +256,14 @@ func apply_lever(lever_id: String, payload: Dictionary) -> bool:
 	if not _sim.has_method("apply_lever"):
 		return false
 	return _sim.apply_lever(lever_id, payload)
+
+func submit_console_command(command_line: String) -> Dictionary:
+	var fallback := {"ok": false, "message": "SIM UNAVAILABLE"}
+	if _sim == null:
+		return fallback
+	if not _sim.has_method("execute_console_command"):
+		return {"ok": false, "message": "COMMANDS NOT SUPPORTED"}
+	var result_value: Variant = _sim.execute_console_command(command_line)
+	if result_value is Dictionary:
+		return result_value
+	return {"ok": false, "message": "INVALID RESPONSE"}

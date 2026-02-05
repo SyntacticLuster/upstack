@@ -20,6 +20,10 @@ var _passed: int = 0
 var _failed: int = 0
 var _checked: int = 0
 var _failures: Array[Dictionary] = []
+var _sampling_interval: int = 1
+var _prev_lever_hours: Dictionary = {}
+var _prev_hour_index: int = -1
+var _last_expedition_member_ids: Array[int] = []
 
 # Track previous expedition state for transition validation.
 var _prev_expedition_state: String = ""
@@ -33,6 +37,13 @@ func reset() -> void:
 	_failures.clear()
 	_prev_expedition_state = ""
 	_prev_expedition_hours = 0
+	_prev_lever_hours.clear()
+	_prev_hour_index = -1
+	_last_expedition_member_ids.clear()
+
+
+func set_sampling_interval(interval: int) -> void:
+	_sampling_interval = max(interval, 1)
 
 
 func total_checked() -> int:
@@ -67,9 +78,32 @@ func record_failure(name: String, message: String) -> void:
 # =============================================================================
 
 func check_continuous(sim: Sim, logger: RefCounted) -> void:
+	_check_NS_no_nan(sim, logger)
+	_check_NS_no_inf(sim, logger)
+	_check_NS_threat_bounds(sim, logger)
+	_check_NS_morale_bounds(sim, logger)
+	_check_NS_population_non_negative(sim, logger)
+	_check_NS_resources_non_negative(sim, logger)
+	_check_NS_strain_bounds(sim, logger)
+	_check_NS_power_accounting(sim, logger)
+	_check_LV_scar_bounds(sim, logger)
+	_check_LV_intensity_bounds(sim, logger)
+	_check_LV_duration_countdown(sim, logger)
+	_check_LV_expiration_state(sim, logger)
 	_check_T1_silver_non_negative(sim, logger)
 	_check_T2_resources_non_negative(sim, logger)
 	_check_E1_single_active_expedition(sim, logger)
+	_check_EX_party_size_bounds(sim, logger)
+	_check_EX_member_status(sim, logger)
+	_check_EX_haul_sanity(sim, logger)
+	var sample_due: bool = (_sampling_interval <= 1) or (sim.hour_index % _sampling_interval == 0)
+	if sample_due:
+		_check_PS_alive_equals_population(sim, logger)
+		_check_PS_no_duplicate_ids(sim, logger)
+		_check_PS_valid_status(sim, logger)
+		_check_MA_module_accounting(sim, logger)
+		_check_MA_abandoned_disabled(sim, logger)
+		_check_MA_priority_unique(sim, logger)
 
 
 func _check_T1_silver_non_negative(sim: Sim, logger: RefCounted) -> void:
@@ -353,6 +387,11 @@ func check_expedition_launch(
 		var expedition := sim.get_active_expedition()
 		_prev_expedition_state = str(expedition.get("state", ""))
 		_prev_expedition_hours = int(expedition.get("hours_in_state", 0))
+		var member_value: Variant = expedition.get("member_ids", [])
+		_last_expedition_member_ids.clear()
+		if member_value is Array:
+			for member_id in member_value:
+				_last_expedition_member_ids.append(int(member_id))
 
 
 func _check_E2_crew_valid(sim: Sim, logger: RefCounted, crew: int) -> void:
@@ -521,3 +560,600 @@ func _check_E9_resolution_event(sim: Sim, logger: RefCounted) -> void:
 			"no active expedition",
 			"expedition still active"
 		)
+
+
+# =============================================================================
+# Numeric Sanity (NS-*)
+# =============================================================================
+
+func _check_NS_no_nan(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var nan_fields: Array[String] = []
+	if is_nan(sim.res.morale_ceiling):
+		nan_fields.append("morale_ceiling")
+	if is_nan(sim.res.attention_multiplier):
+		nan_fields.append("attention_multiplier")
+	if is_nan(sim.res.collapse_debt):
+		nan_fields.append("collapse_debt")
+	if is_nan(sim.res.strain):
+		nan_fields.append("strain")
+	if is_nan(sim.ration_scar):
+		nan_fields.append("ration_scar")
+	if is_nan(sim.labor_scar):
+		nan_fields.append("labor_scar")
+	if is_nan(sim.expedition_attention):
+		nan_fields.append("expedition_attention")
+
+	if nan_fields.is_empty():
+		_passed += 1
+		logger.log_invariant("NS-1_NO_NAN", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-1_NO_NAN",
+			"NaN detected in fields: %s" % ", ".join(nan_fields),
+			sim.hour_index,
+			sim.day,
+			"finite",
+			"NaN in: %s" % ", ".join(nan_fields)
+		)
+
+
+func _check_NS_no_inf(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var inf_fields: Array[String] = []
+	if is_inf(sim.res.morale_ceiling):
+		inf_fields.append("morale_ceiling")
+	if is_inf(sim.res.attention_multiplier):
+		inf_fields.append("attention_multiplier")
+	if is_inf(sim.res.collapse_debt):
+		inf_fields.append("collapse_debt")
+	if is_inf(sim.res.strain):
+		inf_fields.append("strain")
+	if is_inf(sim.ration_scar):
+		inf_fields.append("ration_scar")
+	if is_inf(sim.labor_scar):
+		inf_fields.append("labor_scar")
+	if is_inf(sim.expedition_attention):
+		inf_fields.append("expedition_attention")
+
+	if inf_fields.is_empty():
+		_passed += 1
+		logger.log_invariant("NS-2_NO_INF", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-2_NO_INF",
+			"Inf detected in fields: %s" % ", ".join(inf_fields),
+			sim.hour_index,
+			sim.day,
+			"finite",
+			"Inf in: %s" % ", ".join(inf_fields)
+		)
+
+
+func _check_NS_threat_bounds(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.res.threat >= 0 and sim.res.threat <= 999:
+		_passed += 1
+		logger.log_invariant("NS-3_THREAT_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-3_THREAT_BOUNDS",
+			"Threat out of bounds",
+			sim.hour_index,
+			sim.day,
+			"0..999",
+			str(sim.res.threat)
+		)
+
+
+func _check_NS_morale_bounds(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var morale_cap: int = int(floor(sim.res.morale_ceiling))
+	if sim.res.morale >= 0 and sim.res.morale <= morale_cap:
+		_passed += 1
+		logger.log_invariant("NS-4_MORALE_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-4_MORALE_BOUNDS",
+			"Morale out of bounds",
+			sim.hour_index,
+			sim.day,
+			"0..%d" % morale_cap,
+			str(sim.res.morale)
+		)
+
+
+func _check_NS_population_non_negative(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.res.population >= 0:
+		_passed += 1
+		logger.log_invariant("NS-5_POPULATION_NON_NEGATIVE", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-5_POPULATION_NON_NEGATIVE",
+			"Population went negative",
+			sim.hour_index,
+			sim.day,
+			">= 0",
+			str(sim.res.population)
+		)
+
+
+func _check_NS_resources_non_negative(sim: Sim, logger: RefCounted) -> void:
+	var keys: Array[String] = ["food", "water", "materials", "silver", "gold"]
+	for key in keys:
+		_checked += 1
+		var amount := sim.res.get_amount(key)
+		if amount >= 0:
+			_passed += 1
+		else:
+			_failed += 1
+			logger.log_invariant_fail(
+				"NS-6_RESOURCE_NON_NEGATIVE",
+				"Resource %s went negative" % key,
+				sim.hour_index,
+				sim.day,
+				">= 0",
+				str(amount)
+			)
+
+
+func _check_NS_strain_bounds(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.res.strain >= 0.0 and sim.res.strain <= 100.0:
+		_passed += 1
+		logger.log_invariant("NS-7_STRAIN_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-7_STRAIN_BOUNDS",
+			"Structural strain out of bounds",
+			sim.hour_index,
+			sim.day,
+			"0..100",
+			"%.2f" % sim.res.strain
+		)
+
+
+func _check_NS_power_accounting(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.res.power_used <= sim.res.power_supply:
+		_passed += 1
+		logger.log_invariant("NS-8_POWER_ACCOUNTING", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"NS-8_POWER_ACCOUNTING",
+			"Power used exceeds supply",
+			sim.hour_index,
+			sim.day,
+			"used <= supply",
+			"%d/%d" % [sim.res.power_used, sim.res.power_supply]
+		)
+
+
+# =============================================================================
+# People System (PS-*)
+# =============================================================================
+
+func _check_PS_alive_equals_population(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var alive_count: int = sim._alive_people_count()
+	var population: int = sim.res.population
+	if alive_count == population:
+		_passed += 1
+		logger.log_invariant("PS-1_ALIVE_EQUALS_POP", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"PS-1_ALIVE_EQUALS_POP",
+			"Alive people count mismatch",
+			sim.hour_index,
+			sim.day,
+			str(population),
+			str(alive_count)
+		)
+
+
+func _check_PS_no_duplicate_ids(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var seen: Dictionary = {}
+	for entry in sim._people:
+		if not (entry is Dictionary):
+			continue
+		var person_id: int = int((entry as Dictionary).get("id", -1))
+		if person_id <= 0:
+			continue
+		if seen.has(person_id):
+			_failed += 1
+			logger.log_invariant_fail(
+				"PS-2_NO_DUPLICATE_IDS",
+				"Duplicate person id detected",
+				sim.hour_index,
+				sim.day,
+				"unique ids",
+				str(person_id)
+			)
+			return
+		seen[person_id] = true
+	_passed += 1
+	logger.log_invariant("PS-2_NO_DUPLICATE_IDS", true, sim.hour_index, sim.day)
+
+
+func _check_PS_valid_status(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	var allowed := {
+		sim.PEOPLE_STATUS_HOME: true,
+		sim.PEOPLE_STATUS_AWAY: true,
+		sim.PEOPLE_STATUS_INJURED: true,
+		sim.PEOPLE_STATUS_DEAD: true,
+	}
+	for entry in sim._people:
+		if not (entry is Dictionary):
+			continue
+		var status: String = str((entry as Dictionary).get("status", ""))
+		if not allowed.has(status):
+			_failed += 1
+			logger.log_invariant_fail(
+				"PS-3_VALID_STATUS",
+				"Invalid person status",
+				sim.hour_index,
+				sim.day,
+				"home/away/injured/dead",
+				status
+			)
+			return
+	_passed += 1
+	logger.log_invariant("PS-3_VALID_STATUS", true, sim.hour_index, sim.day)
+
+
+# =============================================================================
+# Expedition Sanity (EX-*)
+# =============================================================================
+
+func _check_EX_party_size_bounds(sim: Sim, logger: RefCounted) -> void:
+	if not sim.has_active_expedition():
+		return
+	_checked += 1
+	var expedition: Dictionary = sim.get_active_expedition()
+	var party_size: int = int(expedition.get("party_size", expedition.get("crew", 0)))
+	var max_party_size: int = sim.get_max_party_size()
+	if party_size >= 1 and party_size <= max_party_size:
+		_passed += 1
+		logger.log_invariant("EX-3_PARTY_SIZE_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"EX-3_PARTY_SIZE_BOUNDS",
+			"Expedition party size out of bounds",
+			sim.hour_index,
+			sim.day,
+			"1..%d" % max_party_size,
+			str(party_size)
+		)
+
+
+func _check_EX_member_status(sim: Sim, logger: RefCounted) -> void:
+	if not sim.has_active_expedition():
+		return
+	_checked += 1
+	var expedition: Dictionary = sim.get_active_expedition()
+	var member_value: Variant = expedition.get("member_ids", [])
+	if not (member_value is Array):
+		_passed += 1
+		logger.log_invariant("EX-4_MEMBER_IDS_VALID", true, sim.hour_index, sim.day)
+		return
+	var member_ids: Array = member_value as Array
+	for member_id in member_ids:
+		var person_id: int = int(member_id)
+		var found := false
+		for entry in sim._people:
+			if not (entry is Dictionary):
+				continue
+			var entry_id: int = int((entry as Dictionary).get("id", -1))
+			if entry_id == person_id:
+				found = true
+				var status: String = str((entry as Dictionary).get("status", ""))
+				if status != sim.PEOPLE_STATUS_AWAY:
+					_failed += 1
+					logger.log_invariant_fail(
+						"EX-4_MEMBER_IDS_VALID",
+						"Expedition member not marked away",
+						sim.hour_index,
+						sim.day,
+						"away",
+						status
+					)
+					return
+				break
+		if not found:
+			_failed += 1
+			logger.log_invariant_fail(
+				"EX-4_MEMBER_IDS_VALID",
+				"Expedition member id missing",
+				sim.hour_index,
+				sim.day,
+				"existing person",
+				str(person_id)
+			)
+			return
+	_passed += 1
+	logger.log_invariant("EX-4_MEMBER_IDS_VALID", true, sim.hour_index, sim.day)
+
+
+func _check_EX_haul_sanity(sim: Sim, logger: RefCounted) -> void:
+	if sim.has_active_expedition():
+		return
+	if _last_expedition_member_ids.is_empty():
+		return
+	_checked += 1
+	# Best-effort check: after resolve, ensure members return home or dead.
+	for member_id in _last_expedition_member_ids:
+		var person_id: int = int(member_id)
+		for entry in sim._people:
+			if not (entry is Dictionary):
+				continue
+			var entry_id: int = int((entry as Dictionary).get("id", -1))
+			if entry_id == person_id:
+				var status: String = str((entry as Dictionary).get("status", ""))
+				if status != sim.PEOPLE_STATUS_HOME and status != sim.PEOPLE_STATUS_DEAD:
+					_failed += 1
+					logger.log_invariant_fail(
+						"EX-5_MEMBER_RECONCILE",
+						"Expedition member status not reconciled",
+						sim.hour_index,
+						sim.day,
+						"home/dead",
+						status
+					)
+					return
+				break
+	_passed += 1
+	logger.log_invariant("EX-5_MEMBER_RECONCILE", true, sim.hour_index, sim.day)
+	_last_expedition_member_ids.clear()
+
+
+# =============================================================================
+# Command Queue (CQ-*)
+# =============================================================================
+
+func check_command_queue(
+	sim: Sim,
+	logger: RefCounted,
+	cmd_type: String,
+	stalled: bool,
+	pre_state: Dictionary,
+	post_state: Dictionary
+) -> void:
+	_checked += 1
+	if sim._command_queue.is_empty():
+		_passed += 1
+		logger.log_invariant("CQ-1_QUEUE_DRAINED", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"CQ-1_QUEUE_DRAINED",
+			"Command queue not empty after production",
+			sim.hour_index,
+			sim.day,
+			"empty",
+			"size=%d" % sim._command_queue.size()
+		)
+
+	_checked += 1
+	var compliance_subject := (cmd_type == Sim.CMD_TRADE or cmd_type == Sim.CMD_EXPEDITION)
+	if stalled and not compliance_subject:
+		_failed += 1
+		logger.log_invariant_fail(
+			"CQ-3_COMPLIANCE_SCOPE",
+			"Compliance stall on non-compliance command",
+			sim.hour_index,
+			sim.day,
+			"trade/expedition",
+			cmd_type
+		)
+	else:
+		_passed += 1
+		logger.log_invariant("CQ-3_COMPLIANCE_SCOPE", true, sim.hour_index, sim.day)
+
+	_checked += 1
+	if stalled and not _dict_equals(pre_state, post_state):
+		_failed += 1
+		logger.log_invariant_fail(
+			"CQ-2_STALL_NO_SIDE_EFFECTS",
+			"Stalled command mutated tracked state",
+			sim.hour_index,
+			sim.day,
+			JSON.stringify(pre_state),
+			JSON.stringify(post_state)
+		)
+	else:
+		_passed += 1
+		logger.log_invariant("CQ-2_STALL_NO_SIDE_EFFECTS", true, sim.hour_index, sim.day)
+
+
+func _dict_equals(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for key in a.keys():
+		if not b.has(key):
+			return false
+		var left: Variant = a.get(key)
+		var right: Variant = b.get(key)
+		if left != right:
+			return false
+	return true
+
+
+# =============================================================================
+# Lever Invariants (LV-*)
+# =============================================================================
+
+func _check_LV_scar_bounds(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.ration_scar >= 0.0 and sim.labor_scar >= 0.0:
+		_passed += 1
+		logger.log_invariant("LV-2_SCAR_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"LV-2_SCAR_BOUNDS",
+			"Lever scar went negative",
+			sim.hour_index,
+			sim.day,
+			">= 0",
+			"ration=%.2f labor=%.2f" % [sim.ration_scar, sim.labor_scar]
+		)
+
+
+func _check_LV_intensity_bounds(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if (
+		sim.labor_overdrive_intensity <= Sim.LABOR_OVERDRIVE_MAX_INTENSITY
+		and sim.expedition_compression_intensity <= Sim.EXPEDITION_COMPRESSION_MAX_INTENSITY
+		and sim.info_throttle_level <= Sim.INFO_THROTTLE_MAX_LEVEL
+	):
+		_passed += 1
+		logger.log_invariant("LV-3_INTENSITY_BOUNDS", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"LV-3_INTENSITY_BOUNDS",
+			"Lever intensity out of bounds",
+			sim.hour_index,
+			sim.day,
+			"<= max",
+			"labor=%d expedition=%d info=%d" % [
+				sim.labor_overdrive_intensity,
+				sim.expedition_compression_intensity,
+				sim.info_throttle_level,
+			]
+		)
+
+
+func _check_LV_duration_countdown(sim: Sim, logger: RefCounted) -> void:
+	var current: Dictionary = {
+		"ration": sim.ration_hardening_hours_left,
+		"labor": sim.labor_overdrive_hours_left,
+		"expedition": sim.expedition_compression_hours_left,
+		"info": sim.info_throttle_hours_left,
+	}
+	if _prev_hour_index >= 0 and sim.hour_index == _prev_hour_index + 1:
+		for key in current.keys():
+			var prev_value: int = int(_prev_lever_hours.get(key, int(current.get(key, 0))))
+			var next_value: int = int(current.get(key, 0))
+			if prev_value > 0 and next_value < prev_value and next_value != prev_value - 1:
+				_checked += 1
+				_failed += 1
+				logger.log_invariant_fail(
+					"LV-1_DURATION_COUNTDOWN",
+					"Lever hours_left did not decrement by 1",
+					sim.hour_index,
+					sim.day,
+					"%d" % (prev_value - 1),
+					"%d" % next_value
+				)
+				_prev_lever_hours = current
+				_prev_hour_index = sim.hour_index
+				return
+	_checked += 1
+	_passed += 1
+	logger.log_invariant("LV-1_DURATION_COUNTDOWN", true, sim.hour_index, sim.day)
+	_prev_lever_hours = current
+	_prev_hour_index = sim.hour_index
+
+
+func _check_LV_expiration_state(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if (
+		sim.ration_hardening_hours_left == 0
+		and sim.labor_overdrive_hours_left == 0
+		and sim.expedition_compression_hours_left == 0
+		and sim.info_throttle_hours_left == 0
+	):
+		_passed += 1
+		logger.log_invariant("LV-4_EXPIRATION_STATE", true, sim.hour_index, sim.day)
+		return
+	# If any lever active, consider invariant satisfied (no expiration needed).
+	_passed += 1
+	logger.log_invariant("LV-4_EXPIRATION_STATE", true, sim.hour_index, sim.day)
+
+
+# =============================================================================
+# Module Accounting (MA-*)
+# =============================================================================
+
+func _check_MA_module_accounting(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	if sim.res.power_used <= sim.res.power_supply:
+		_passed += 1
+		logger.log_invariant("MA-1_POWER_BALANCE", true, sim.hour_index, sim.day)
+	else:
+		_failed += 1
+		logger.log_invariant_fail(
+			"MA-1_POWER_BALANCE",
+			"Power balance negative",
+			sim.hour_index,
+			sim.day,
+			"used <= supply",
+			"%d/%d" % [sim.res.power_used, sim.res.power_supply]
+		)
+
+
+func _check_MA_abandoned_disabled(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	for key in sim.abandoned_modules.keys():
+		var parts := str(key).split(":")
+		if parts.size() != 3:
+			continue
+		var f: int = int(parts[0])
+		var x: int = int(parts[1])
+		var y: int = int(parts[2])
+		if sim.tower.is_module_enabled(f, x, y):
+			_failed += 1
+			logger.log_invariant_fail(
+				"MA-2_ABANDONED_DISABLED",
+				"Abandoned module still enabled",
+				sim.hour_index,
+				sim.day,
+				"disabled",
+				"enabled"
+			)
+			return
+	_passed += 1
+	logger.log_invariant("MA-2_ABANDONED_DISABLED", true, sim.hour_index, sim.day)
+
+
+func _check_MA_priority_unique(sim: Sim, logger: RefCounted) -> void:
+	_checked += 1
+	for floor_idx in range(sim.tower.floor_count()):
+		var seen: Dictionary = {}
+		var grid: Array[Variant] = sim.tower.floors[floor_idx]
+		for y in range(grid.size()):
+			var row: Array[Variant] = grid[y]
+			for x in range(row.size()):
+				if row[x] == null:
+					continue
+				var priority_value: Variant = sim.tower.get_module_priority_override(floor_idx, x, y)
+				if priority_value == null:
+					continue
+				var prio: int = int(priority_value)
+				if seen.has(prio):
+					_failed += 1
+					logger.log_invariant_fail(
+						"MA-3_PRIORITY_UNIQUE",
+						"Duplicate module priority override",
+						sim.hour_index,
+						sim.day,
+						"unique priority",
+						str(prio)
+					)
+					return
+				seen[prio] = true
+	_passed += 1
+	logger.log_invariant("MA-3_PRIORITY_UNIQUE", true, sim.hour_index, sim.day)

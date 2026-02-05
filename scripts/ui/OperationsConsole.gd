@@ -357,6 +357,11 @@ func set_sim(sim_ref: Object) -> void:
 	call_deferred("_configure_expedition_tabs")
 	refresh()
 
+func submit_console_command(command_line: String) -> Dictionary:
+	if _sim_bridge == null or not _sim_bridge.has_sim():
+		return {"ok": false, "message": "SIM UNAVAILABLE"}
+	return _sim_bridge.submit_console_command(command_line)
+
 func _configure_expedition_tabs() -> void:
 	if _expedition_tabs_configured:
 		_apply_expedition_tab_modes()
