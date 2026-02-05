@@ -168,3 +168,45 @@ static func format_currency(value: int) -> String:
 	while fraction_text.length() < CURRENCY_DISPLAY_DECIMALS:
 		fraction_text = "0" + fraction_text
 	return "%s%d.%s" % [prefix, whole, fraction_text]
+
+func _test_export_state() -> Dictionary:
+	return {
+		"food": food,
+		"water": water,
+		"days_without_food": days_without_food,
+		"days_without_water": days_without_water,
+		"materials": materials,
+		"morale": morale,
+		"threat": threat,
+		"morale_ceiling": morale_ceiling,
+		"staying_index": staying_index,
+		"attention_multiplier": attention_multiplier,
+		"collapse_debt": collapse_debt,
+		"strain": strain,
+		"population": population,
+		"silver": silver,
+		"gold": gold,
+		"power_supply": power_supply,
+		"power_used": power_used,
+		"_deltas": _deltas.duplicate(true),
+	}
+
+func _test_import_state(state: Dictionary) -> void:
+	food = int(state.get("food", food))
+	water = int(state.get("water", water))
+	days_without_food = int(state.get("days_without_food", days_without_food))
+	days_without_water = int(state.get("days_without_water", days_without_water))
+	materials = int(state.get("materials", materials))
+	morale = int(state.get("morale", morale))
+	threat = int(state.get("threat", threat))
+	morale_ceiling = float(state.get("morale_ceiling", morale_ceiling))
+	staying_index = float(state.get("staying_index", staying_index))
+	attention_multiplier = float(state.get("attention_multiplier", attention_multiplier))
+	collapse_debt = float(state.get("collapse_debt", collapse_debt))
+	strain = float(state.get("strain", strain))
+	population = int(state.get("population", population))
+	silver = int(state.get("silver", silver))
+	gold = int(state.get("gold", gold))
+	power_supply = int(state.get("power_supply", power_supply))
+	power_used = int(state.get("power_used", power_used))
+	_deltas = state.get("_deltas", {}).duplicate(true)

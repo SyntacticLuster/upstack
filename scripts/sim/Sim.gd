@@ -467,6 +467,111 @@ var _people: Array[Dictionary] = []
 var _next_person_id: int = 1
 var people_system_version: int = PEOPLE_SYSTEM_VERSION
 var pending_outsider_identities: Dictionary = {}
+const _SIM_STATE_SIMPLE_KEYS: Array[String] = [
+	"day",
+	"hour_index",
+	"hour_of_day",
+	"phase",
+	"_accum",
+	"sim_seed",
+	"_last_obs_tokens",
+	"_last_module_snapshots",
+	"_last_production_metrics",
+	"lever_events",
+	"events",
+	"visibility_triggered",
+	"_event_sequence",
+	"_morale_tier",
+	"_last_maintenance_shortfall",
+	"_last_attention_summary_hour_index",
+	"_last_attention_summary_value",
+	"_hourly_food_accum",
+	"_hourly_water_accum",
+	"_daily_food_consumed",
+	"_daily_water_consumed",
+	"scheduled_production_hour",
+	"production_executed_today",
+	"_daily_rolls",
+	"unrest_active",
+	"unrest_hours",
+	"exit_reason",
+	"_lever_active_state",
+	"food_ration",
+	"water_ration",
+	"scav_pools",
+	"expedition_crew_today",
+	"expedition_threat_today",
+	"expedition_morale_penalty_today",
+	"ration_morale_penalty_today",
+	"ration_threat_penalty_today",
+	"workforce_multiplier_today",
+	"ration_consumption_multiplier_today",
+	"ration_recovery_multiplier_today",
+	"labor_output_multiplier_today",
+	"labor_efficiency_cap_today",
+	"expedition_yield_bonus_per_crew_today",
+	"expedition_attention_bonus_per_trip_today",
+	"info_throttle_morale_factor_today",
+	"info_misalloc_multiplier_today",
+	"lever_threat_bonus_today",
+	"expedition_count_total",
+	"expedition_streak",
+	"expedition_recent_score",
+	"expedition_heat",
+	"expedition_commands_today",
+	"expedition_happened_today",
+	"active_expedition",
+	"location_heat",
+	"pending_outsiders",
+	"rejected_outsiders_days_left",
+	"expedition_id_counter",
+	"pending_arrival_id_counter",
+	"expedition_counter",
+	"_delayed_consequence_queue",
+	"_delayed_insertion_counter",
+	"_consequence_queue",
+	"_consequence_insertion_counter",
+	"_structural_telegraph_level",
+	"_structural_warning_logged",
+	"_structural_high_strain_days",
+	"_structural_collapse_scheduled",
+	"ration_hardening_ticks_left",
+	"ration_hardening_start_hour_index",
+	"ration_hardening_duration_hours",
+	"ration_hardening_end_hour_index",
+	"ration_hardening_hours_left",
+	"ration_hardening_mode",
+	"ration_scar",
+	"labor_overdrive_ticks_left",
+	"labor_overdrive_start_hour_index",
+	"labor_overdrive_duration_hours",
+	"labor_overdrive_end_hour_index",
+	"labor_overdrive_hours_left",
+	"labor_overdrive_intensity",
+	"labor_scar",
+	"expedition_compression_ticks_left",
+	"expedition_compression_start_hour_index",
+	"expedition_compression_duration_hours",
+	"expedition_compression_end_hour_index",
+	"expedition_compression_hours_left",
+	"expedition_compression_intensity",
+	"expedition_attention",
+	"info_throttle_ticks_left",
+	"info_throttle_start_hour_index",
+	"info_throttle_duration_hours",
+	"info_throttle_end_hour_index",
+	"info_throttle_hours_left",
+	"info_throttle_level",
+	"info_throttle_backlog",
+	"abandoned_modules",
+	"conversion_scar",
+	"conversion_burn_counts",
+	"pending_conversions",
+	"_people",
+	"_next_person_id",
+	"people_system_version",
+	"pending_outsider_identities",
+]
 
 func _ready() -> void:
 	_setup_default_state()
@@ -5375,3 +5480,92 @@ func debug_test_expedition_escalation() -> void:
 # var lines := debug_scripted_run(30, 12345, schedule)
 # for line in lines:
 # 	print(line)
+
+
+func _duplicate_state_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		return (value as Dictionary).duplicate(true)
+	if value is Array:
+		return (value as Array).duplicate(true)
+	return value
+
+func _export_command_queue() -> Array:
+	var queue_copy: Array = []
+	for cmd in _command_queue:
+		if cmd is SimCommand:
+			queue_copy.append(cmd.clone())
+	return queue_copy
+
+func _restore_command_queue(data: Array) -> void:
+	_command_queue.clear()
+	if data is Array:
+		for entry in data:
+			if entry is SimCommand:
+				_command_queue.append(entry.clone())
+
+func _copy_rng_history() -> Array:
+	var history: Array = []
+	for entry in _rng_usage_history:
+		if entry is Dictionary:
+			history.append((entry as Dictionary).duplicate(true))
+	return history
+
+func _restore_rng_history(data: Array) -> void:
+	_rng_usage_history.clear()
+	_rng_usage_lookup.clear()
+	if data is Array:
+		for entry in data:
+			if entry is Dictionary:
+				var copy_entry := (entry as Dictionary).duplicate(true)
+				var key := str(copy_entry.get("key", ""))
+				_rng_usage_history.append(copy_entry)
+				if key != "":
+					_rng_usage_lookup[key] = copy_entry
+
+func _copy_rng_instances() -> Dictionary:
+	var rng_copy: Dictionary = {}
+	for key in _rng_instances.keys():
+		var rng_variant: Variant = _rng_instances.get(key)
+		if rng_variant is RandomNumberGenerator:
+			var rng: RandomNumberGenerator = rng_variant as RandomNumberGenerator
+			rng_copy[str(key)] = rng.duplicate(true)
+	return rng_copy
+
+func _restore_rng_instances(data: Dictionary) -> void:
+	_rng_instances.clear()
+	if data is Dictionary:
+		for key in data.keys():
+			var rng_value: Variant = data.get(key)
+			if rng_value is RandomNumberGenerator:
+				var rng: RandomNumberGenerator = rng_value as RandomNumberGenerator
+				_rng_instances[str(key)] = rng.duplicate(true)
+
+func _test_export_state() -> Dictionary:
+	var state: Dictionary = {}
+	for key in _SIM_STATE_SIMPLE_KEYS:
+		var value: Variant = get(key)
+		state[key] = _duplicate_state_value(value)
+	state["tower"] = tower._test_export_state() if tower != null else null
+	state["res"] = res._test_export_state() if res != null else null
+	state["_command_queue"] = _export_command_queue()
+	state["_rng_usage_history"] = _copy_rng_history()
+	state["_rng_instances"] = _copy_rng_instances()
+	return state
+
+func _test_import_state(state: Dictionary) -> void:
+	for key in _SIM_STATE_SIMPLE_KEYS:
+		if state.has(key):
+			set(key, _duplicate_state_value(state.get(key)))
+	tower = Tower.new()
+	var tower_state: Variant = state.get("tower", {})
+	if tower_state is Dictionary:
+		tower._test_import_state(tower_state)
+	res = Resources.new()
+	var res_state: Variant = state.get("res", {})
+	if res_state is Dictionary:
+		res._test_import_state(res_state)
+	db = ModuleDB.new()
+	map_def = MapDefRef.new()
+	_restore_command_queue(state.get("_command_queue", []))
+	_restore_rng_history(state.get("_rng_usage_history", []))
+	_restore_rng_instances(state.get("_rng_instances", {}))

@@ -8,6 +8,7 @@ const DEFAULT_ACTION_WEIGHTS := {
 	"cmd_rations": 8,
 	"cmd_expedition": 12,
 	"cmd_trade": 12,
+	"trade_immediate": 4,
 	"cmd_module_enable": 6,
 	"cmd_module_priority": 4,
 	"cmd_outsiders": 4,
@@ -80,6 +81,8 @@ func next_action(sim: Sim) -> Dictionary:
 			action = _gen_cmd_rations(sim)
 		"cmd_expedition":
 			action = _gen_cmd_expedition(sim)
+		"trade_immediate":
+			action = _gen_trade_immediate(sim)
 		"cmd_trade":
 			action = _gen_cmd_trade(sim)
 		"cmd_module_enable":
@@ -164,17 +167,30 @@ func _gen_cmd_expedition(sim: Sim) -> Dictionary:
 	}
 
 
+func _gen_trade_immediate(_sim: Sim) -> Dictionary:
+	var payload := _build_trade_payload(_sim)
+	if payload.is_empty():
+		return _skip_action("no tradeable resources")
+	payload["type"] = "trade_immediate"
+	return payload
+
 func _gen_cmd_trade(_sim: Sim) -> Dictionary:
+	var payload := _build_trade_payload(_sim)
+	if payload.is_empty():
+		return _skip_action("no tradeable resources")
+	payload["type"] = "cmd_trade"
+	return payload
+
+func _build_trade_payload(_sim: Sim) -> Dictionary:
 	var resources: Array = Sim.TRADEABLE_RESOURCES
 	if resources.is_empty():
-		return _skip_action("no tradeable resources")
+		return {}
 	var direction := "buy" if _rng.randf() < 0.5 else "sell"
 	var resource := str(resources[_rng.randi_range(0, resources.size() - 1)])
 	var min_amt: int = int(_trade_bounds.get("min", 1))
 	var max_amt: int = int(_trade_bounds.get("max", 50))
 	var amount: int = _rng.randi_range(max(min_amt, 1), max(max_amt, min_amt))
 	return {
-		"type": "cmd_trade",
 		"direction": direction,
 		"resource": resource,
 		"amount": amount,

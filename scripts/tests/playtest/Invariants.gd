@@ -931,10 +931,12 @@ func check_command_queue(
 	sim: Sim,
 	logger: RefCounted,
 	cmd_type: String,
-	stalled: bool,
+	outcome: String,
 	pre_state: Dictionary,
 	post_state: Dictionary
 ) -> void:
+	var stalled := outcome == "stalled"
+	var rejected := outcome == "rejected"
 	_checked += 1
 	if sim._command_queue.is_empty():
 		_passed += 1
@@ -980,6 +982,11 @@ func check_command_queue(
 	else:
 		_passed += 1
 		logger.log_invariant("CQ-2_STALL_NO_SIDE_EFFECTS", true, sim.hour_index, sim.day)
+
+	if rejected:
+		_checked += 1
+		_passed += 1
+		logger.log_invariant("CQ-4_COMMAND_REJECTED", true, sim.hour_index, sim.day)
 
 
 func _dict_equals(a: Dictionary, b: Dictionary) -> bool:

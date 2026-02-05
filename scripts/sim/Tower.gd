@@ -95,3 +95,32 @@ func get_module_priority_override(floor_idx: int, x: int, y: int) -> Variant:
 	_ensure_state(floor_idx, x, y)
 	var key := _cell_key(floor_idx, x, y)
 	return module_states[key].get("priority_override", null)
+
+func _test_export_state() -> Dictionary:
+	var floors_copy: Array = []
+	for floor_data in floors:
+		if floor_data is Array:
+			floors_copy.append((floor_data as Array).duplicate(true))
+		else:
+			floors_copy.append([])
+	return {
+		"width": width,
+		"height": height,
+		"floors": floors_copy,
+		"module_states": module_states.duplicate(true),
+	}
+
+func _test_import_state(state: Dictionary) -> void:
+	var safe_width: int = int(state.get("width", width))
+	var safe_height: int = int(state.get("height", height))
+	width = max(safe_width, 0)
+	height = max(safe_height, 0)
+	var floors_value: Variant = state.get("floors", [])
+	floors.clear()
+	if floors_value is Array:
+		for floor_entry in floors_value as Array:
+			if floor_entry is Array:
+				floors.append((floor_entry as Array).duplicate(true))
+			else:
+				floors.append([])
+	module_states = state.get("module_states", {}).duplicate(true)

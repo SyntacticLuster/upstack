@@ -29,6 +29,8 @@ var _deterministic_logs: bool = true
 var _repeat_for_determinism: bool = false
 var _out_dir_override: String = ""
 var _invariant_sampling: int = 1
+var _strict_command_deltas: bool = false
+var _strict_delta_sampling: int = 25
 
 var _loader: RefCounted  # ScenarioLoader
 var _executor: RefCounted  # ActionExecutor
@@ -76,6 +78,10 @@ func _parse_args() -> void:
 			_out_dir_override = arg_str.substr("--out-dir=".length())
 		elif arg_str.begins_with("--invariant-sampling="):
 			_invariant_sampling = max(1, int(arg_str.substr("--invariant-sampling=".length())))
+		elif arg_str == "--strict-command-deltas":
+			_strict_command_deltas = true
+		elif arg_str.begins_with("--strict-delta-sampling="):
+			_strict_delta_sampling = max(1, int(arg_str.substr("--strict-delta-sampling=".length())))
 
 
 func _run_all() -> void:
@@ -88,7 +94,12 @@ func _run_all() -> void:
 	_invariants.set_sampling_interval(_invariant_sampling)
 
 	var scenarios: Array[Dictionary] = _discover_scenarios()
-	_logger.log_config({"scenarios_dir": _resolved_scenarios_dir})
+	var run_config := {
+		"scenarios_dir": _resolved_scenarios_dir,
+		"strict_command_deltas": _strict_command_deltas,
+		"strict_delta_sampling": _strict_delta_sampling,
+	}
+	_logger.log_config(run_config)
 	if scenarios.is_empty():
 		_logger.log_error("No scenarios found in %s" % _resolved_scenarios_dir)
 		quit(EXIT_EXECUTION_ERROR)
@@ -220,6 +231,7 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 	if mode == "generated":
 		max_hours_for_run = _max_hours + Sim.HOURS_PER_DAY
 	_executor.reset(sim, _logger, _invariants, max_hours_for_run)
+	_executor.configure_strict_command_deltas(_strict_command_deltas, _strict_delta_sampling)
 	_invariants.reset()
 	_invariants.set_sampling_interval(_invariant_sampling)
 
@@ -251,13 +263,17 @@ func _execute_scenario_once(_scenario_name: String, seed_value: int, actions: Ar
 				signatures.append(sim._state_signature())
 
 				if not exec_result.get("ok", false):
-					var action_message := str(exec_result.get("message", "Execution error"))
-					_logger.log_action_fail(action_dict, action_message)
-					_handle_failure(_scenario_name, seed_value, action_message)
-					execution_failed = true
-					failure_type = "action_fail"
-					failure_message = action_message
-					break
+				var action_message := str(exec_result.get("message", "Execution error"))
+				_logger.log_action_fail(action_dict, action_message)
+				var failure_details: Dictionary = {}
+				var strict_payload: Variant = exec_result.get("strict_failure", null)
+				if strict_payload is Dictionary:
+					failure_details["strict_delta"] = strict_payload as Dictionary
+				_handle_failure(_scenario_name, seed_value, action_message, failure_details)
+				execution_failed = true
+				failure_type = "action_fail"
+				failure_message = action_message
+				break
 
 				if _invariants.total_failed() > 0:
 					var last_failure: Dictionary = _logger.get_last_invariant_failure()
@@ -444,7 +460,11 @@ func _run_generated_scenario(
 		if not exec_result.get("ok", false):
 			var action_message := str(exec_result.get("message", "Execution error"))
 			_logger.log_action_fail(action, action_message)
-			_handle_failure(scenario_name, seed_value, action_message)
+			var failure_details: Dictionary = {}
+			var strict_payload: Variant = exec_result.get("strict_failure", null)
+			if strict_payload is Dictionary:
+				failure_details["strict_delta"] = strict_payload as Dictionary
+			_handle_failure(scenario_name, seed_value, action_message, failure_details)
 			failed = true
 			failure_type = "action_fail"
 			failure_message = action_message
@@ -506,7 +526,7 @@ func _compare_signature_sequences(
 	return true
 
 
-func _handle_failure(scenario_name: String, seed_value: int, reason: String) -> void:
+func _handle_failure(scenario_name: String, seed_value: int, reason: String, details: Dictionary = {}) -> void:
 	var failure: Dictionary = _logger.get_last_invariant_failure()
 	var invariant_id: String = str(failure.get("name", ""))
 	var message: String = str(failure.get("message", reason))
@@ -534,6 +554,8 @@ func _handle_failure(scenario_name: String, seed_value: int, reason: String) -> 
 		},
 		"rng_history_tail": rng_tail,
 	}
+	if details.has("strict_delta"):
+		failure_record["strict_delta"] = details.get("strict_delta")
 
 	_write_failure_artifacts(failure_record)
 
